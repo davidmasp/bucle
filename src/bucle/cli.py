@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from rich.console import Console
+from rich.table import Table
 import tomlkit
 import typer
 
@@ -117,6 +119,25 @@ def reset(
         raise typer.Exit(1) from error
 
     typer.echo(f"Reset task: {task_name}")
+
+
+@app.command()
+def tasks(
+    config: Path = typer.Option(
+        Path(".bucle.toml"),
+        "--config",
+        "-c",
+        help="Path to the .bucle.toml file.",
+    ),
+) -> None:
+    """List configured tasks and their current status."""
+    try:
+        bucle_config = load_config(config)
+    except ConfigError as error:
+        typer.echo(f"Invalid config: {error}", err=True)
+        raise typer.Exit(1) from error
+
+    print_tasks(bucle_config)
 
 
 def load_config(path: Path) -> BucleConfig:
@@ -250,6 +271,42 @@ def reset_task(config: BucleConfig, task_name: str) -> None:
         return
 
     raise ConfigError(f"task not found: {task_name}")
+
+
+def print_tasks(config: BucleConfig) -> None:
+    console = Console()
+    table = Table(title=f"Tasks for {config.document['metadata']['name']}")
+    table.add_column("#", justify="right", style="dim")
+    table.add_column("Task", style="bold")
+    table.add_column("Agent", style="cyan")
+    table.add_column("Status")
+    table.add_column("Prompt", overflow="fold")
+
+    for index, task in enumerate(config.document["tasks"], start=1):
+        status_text, status_style = format_task_status(task)
+        table.add_row(
+            str(index),
+            str(task["name"]),
+            str(task["agent"]),
+            status_text,
+            str(task["prompt"]),
+            style=status_style,
+        )
+
+    console.print(table)
+
+
+def format_task_status(task: Any) -> tuple[str, str]:
+    status = task.get("status")
+    if status == "success":
+        return "✅ done", "green"
+    if status == "failure":
+        reason = task.get("failure_reason")
+        detail = f": {reason}" if reason else ""
+        return f"❌ not done{detail}", "red"
+    if status == "uncompleted":
+        return "⚠️ not done", "yellow"
+    return "⏳ not done", "yellow"
 
 
 def get_pending_tasks(config: BucleConfig) -> list[RunTask]:

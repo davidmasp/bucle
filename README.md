@@ -26,9 +26,14 @@ Each pending task must have `name`, `agent`, and `prompt`. Completed tasks have
 
 ```sh
 bucle check --config .bucle.toml
+bucle tasks --config .bucle.toml
 bucle run --config .bucle.toml
 bucle reset task1 --config .bucle.toml
 ```
+
+`bucle tasks` lists every configured task in a Rich table with emoji status
+markers: ✅ for done tasks, ❌ or ⚠️ for tasks that did not complete, and ⏳ for
+pending tasks.
 
 `bucle run` creates `.bucle/`, resets temporary success/failure marker JSON
 files, runs pending tasks in order, writes per-task logs, reconciles marker

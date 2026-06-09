@@ -9,15 +9,20 @@ import unittest
 from pathlib import Path
 
 import tomlkit
+from typer.testing import CliRunner
 
 from bucle.cli import (
     ConfigError,
+    app,
+    format_task_status,
     load_config,
     reconcile_results,
     render_prompt,
     reset_task,
     run_pending_tasks,
 )
+
+runner = CliRunner()
 
 
 VALID_CONFIG = """
@@ -180,6 +185,45 @@ class ResetTaskTest(unittest.TestCase):
 
             with self.assertRaisesRegex(ConfigError, "task not found: missing"):
                 reset_task(config, "missing")
+
+
+class TaskListTest(unittest.TestCase):
+    def test_format_task_status_marks_success_done(self) -> None:
+        self.assertEqual(format_task_status({"status": "success"}), ("✅ done", "green"))
+
+    def test_format_task_status_marks_missing_status_not_done(self) -> None:
+        self.assertEqual(format_task_status({}), ("⏳ not done", "yellow"))
+
+    def test_tasks_command_lists_statuses(self) -> None:
+        config_text = (
+            VALID_CONFIG.format(cmd="echo {{prompt}}")
+            + """
+            status = "success"
+
+            [[tasks]]
+            name = "task2"
+            agent = "fake"
+            prompt = "Do task two"
+
+            [[tasks]]
+            name = "task3"
+            agent = "fake"
+            prompt = "Do task three"
+            status = "failure"
+            failure_reason = "bad result"
+            """
+        )
+        with temp_config(config_text) as config_path:
+            result = runner.invoke(app, ["tasks", "--config", str(config_path)])
+
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("Tasks for example", result.output)
+        self.assertIn("task1", result.output)
+        self.assertIn("✅ done", result.output)
+        self.assertIn("task2", result.output)
+        self.assertIn("⏳ not done", result.output)
+        self.assertIn("task3", result.output)
+        self.assertIn("❌ not done: bad result", result.output)
 
 
 def config_for_fake_agent(mode: str) -> str:

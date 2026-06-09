@@ -10,5 +10,6 @@ cmd = "codex exec {{prompt}}"
 name = "task1"
 agent = "codex"
 prompt = "say hi!"
+status = "success"
 
 

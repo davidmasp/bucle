@@ -1,15 +1,64 @@
 [metadata]
-name = "my-project"
-preprompt = "You are jack sparrow."
+name = "bucle"
+preprompt = " "
 postprompt = " "
 
 [agents.codex]
 cmd = "codex exec {{prompt}}"
 
+[agents.codexmini]
+cmd = "codex exec --model gpt-5.4-mini -c model_reasoning_effort=low {{prompt}}"
+
+[agents.bigpickle]
+cmd = "opencode run --model opencode/big-pickle {{prompt}}"
+
+[agents.opencode]
+cmd = "opencode run --model openai/gpt-5.5 {{prompt}}"
+
+
 [[tasks]]
 name = "task1"
-agent = "codex"
+agent = "codexmini"
 prompt = "say hi!"
 status = "success"
+
+[[tasks]]
+name = "add-list-alias"
+agent = "opencode"
+prompt = "I want to add a subcommand alias to tasks, essentially if we run bucle list should have the same behaviour than bucle tasks"
+status = "success"
+
+
+[[tasks]]
+name = "remove-prompt-from-list"
+agent = "opencode"
+prompt = "When listing the tasks in list, i don't want to include the prompt, keep all other fields but remove the prompt text itself."
+status = "success"
+
+[[tasks]]
+name = "reverse-mode"
+agent = "opencode"
+prompt = "in the bucle run command, add a --reverse flag. If true, the first task to implement will be the last in the list." 
+
+[[tasks]]
+name = "more-verbose"
+agent = "opencode"
+prompt = "I need to be more verbose when launching a task, for now something similar would be fine, include the name of the task that got launched, the path of the log file and the X out of Y tasks. If rich library includes a spinner, also add it to the mix. I want the runner option"
+
+[[tasks]]
+name = "auto-reset-tasks"
+agent = "opencode"
+prompt = """
+
+I want to add an extra argument value in the task definition. This will be a optional argument so it's not mandatory for the task.
+
+This extra value will be "auto-reset" and it will mean that a particular task is auto-reset when invoking the commad uv run bucle reset (wiht the additional flag --auto)
+
+"""
+
+[[tasks]]
+name = "readme-update"
+agent = "bigpickle"
+prompt = "Check the codebase of this folder, then read the README file. Update it according to the newer functionality available"
 
 

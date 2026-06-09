@@ -224,6 +224,19 @@ class TaskListTest(unittest.TestCase):
         self.assertIn("⏳ not done", result.output)
         self.assertIn("task3", result.output)
         self.assertIn("❌ not done: bad result", result.output)
+        self.assertNotIn("Prompt", result.output)
+        self.assertNotIn("Do task one", result.output)
+        self.assertNotIn("Do task two", result.output)
+        self.assertNotIn("Do task three", result.output)
+
+    def test_list_command_aliases_tasks(self) -> None:
+        with temp_config(VALID_CONFIG.format(cmd="echo {{prompt}}")) as config_path:
+            tasks_result = runner.invoke(app, ["tasks", "--config", str(config_path)])
+            list_result = runner.invoke(app, ["list", "--config", str(config_path)])
+
+        self.assertEqual(tasks_result.exit_code, 0)
+        self.assertEqual(list_result.exit_code, 0)
+        self.assertEqual(list_result.output, tasks_result.output)
 
 
 def config_for_fake_agent(mode: str) -> str:

@@ -121,6 +121,7 @@ def reset(
     typer.echo(f"Reset task: {task_name}")
 
 
+@app.command("list")
 @app.command()
 def tasks(
     config: Path = typer.Option(
@@ -274,13 +275,11 @@ def reset_task(config: BucleConfig, task_name: str) -> None:
 
 
 def print_tasks(config: BucleConfig) -> None:
-    console = Console()
     table = Table(title=f"Tasks for {config.document['metadata']['name']}")
     table.add_column("#", justify="right", style="dim")
     table.add_column("Task", style="bold")
     table.add_column("Agent", style="cyan")
     table.add_column("Status")
-    table.add_column("Prompt", overflow="fold")
 
     for index, task in enumerate(config.document["tasks"], start=1):
         status_text, status_style = format_task_status(task)
@@ -289,10 +288,10 @@ def print_tasks(config: BucleConfig) -> None:
             str(task["name"]),
             str(task["agent"]),
             status_text,
-            str(task["prompt"]),
             style=status_style,
         )
 
+    console = Console()
     console.print(table)
 
 

@@ -1,0 +1,19 @@
+[project]
+name = "bucle"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "David Mas Ponte", email = "david.mas@fht.org" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "typer>=0.26.7",
+]
+
+[project.scripts]
+bucle = "bucle:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

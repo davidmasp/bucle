@@ -1,0 +1,14 @@
+[metadata]
+name = "my-project"
+preprompt = "You are jack sparrow."
+postprompt = " "
+
+[agents.codex]
+cmd = "codex exec {{prompt}}"
+
+[[tasks]]
+name = "task1"
+agent = "codex"
+prompt = "say hi!"
+
+

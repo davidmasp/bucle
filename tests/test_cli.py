@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import json
 import subprocess
 import sys
 import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import tomlkit
 from typer.testing import CliRunner
@@ -116,8 +116,8 @@ class PromptRenderingTest(unittest.TestCase):
         self.assertIn("After", prompt)
         self.assertIn("Task name: task1", prompt)
         self.assertIn("Task prompt:\nDo task one", prompt)
-        self.assertIn(".bucle/success.json", prompt)
-        self.assertIn(".bucle/failure.json", prompt)
+        self.assertIn('echo "task1" >> .bucle/success.txt', prompt)
+        self.assertIn('echo "task1,<reason>" >> .bucle/failure.txt', prompt)
         self.assertIn("success, failure, uncompleted", prompt)
 
 
@@ -131,8 +131,8 @@ class RunReconciliationTest(unittest.TestCase):
             document = tomlkit.parse(config_path.read_text())
             self.assertEqual(document["tasks"][0]["status"], "success")
             self.assertNotIn("failure_reason", document["tasks"][0])
-            self.assertFalse((config_path.parent / ".bucle" / "success.json").exists())
-            self.assertFalse((config_path.parent / ".bucle" / "failure.json").exists())
+            self.assertFalse((config_path.parent / ".bucle" / "success.txt").exists())
+            self.assertFalse((config_path.parent / ".bucle" / "failure.txt").exists())
             self.assert_log_contains(config_path.parent, "exit_code:", "stdout:", "stderr:")
 
     def test_failure_marker_updates_toml_with_reason(self) -> None:
@@ -185,6 +185,33 @@ class RunReconciliationTest(unittest.TestCase):
             ran_tasks = run_pending_tasks(config, reverse=True)
 
         self.assertEqual([task.name for task in ran_tasks], ["task3", "task2", "task1"])
+
+    def test_shuffle_runs_pending_tasks_in_random_order(self) -> None:
+        config_text = (
+            config_for_fake_agent("none")
+            + """
+
+            [[tasks]]
+            name = "task2"
+            agent = "fake"
+            prompt = "Do task two"
+
+            [[tasks]]
+            name = "task3"
+            agent = "fake"
+            prompt = "Do task three"
+            """
+        )
+        with temp_config(config_text) as config_path:
+            config = load_config(config_path)
+            with patch(
+                "bucle.cli.random.shuffle",
+                side_effect=lambda tasks: tasks.insert(0, tasks.pop()),
+            ) as shuffle:
+                ran_tasks = run_pending_tasks(config, shuffle=True)
+
+        shuffle.assert_called_once()
+        self.assertEqual([task.name for task in ran_tasks], ["task3", "task1", "task2"])
 
     def test_run_verbose_prints_launch_details(self) -> None:
         with temp_config(config_for_fake_agent("success")) as config_path:

@@ -27,6 +27,7 @@ I need to change the way the agent reports the success of failures of the task. 
 
 The rest of the logic stays the same so the bucle tool will remove the failure/success files after every run.
 """
+status = "success"
 
 [[tasks]]
 name = "shuffle-flag"
@@ -36,6 +37,7 @@ Create a shuffle order, so instead of reverse or normal order the tasks are pass
 
 The name of the flag is --shuffle
 """
+status = "success"
 
 
 [[tasks]]

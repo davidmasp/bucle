@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 
@@ -10,10 +9,10 @@ def main() -> None:
     _prompt = sys.argv[2]
     output_dir = Path(".bucle")
     if mode == "success":
-        append_marker(output_dir / "success.json", {"name": "task1"})
+        append_marker(output_dir / "success.txt", "task1")
         print("task succeeded")
     elif mode == "failure":
-        append_marker(output_dir / "failure.json", {"name": "task1", "reason": "bad result"})
+        append_marker(output_dir / "failure.txt", "task1,bad result")
         print("task failed")
     elif mode == "none":
         print("task did not write a marker")
@@ -21,10 +20,9 @@ def main() -> None:
         raise SystemExit(f"unknown mode: {mode}")
 
 
-def append_marker(path: Path, entry: dict[str, str]) -> None:
-    data = json.loads(path.read_text())
-    data.append(entry)
-    path.write_text(json.dumps(data, indent=2) + "\n")
+def append_marker(path: Path, entry: str) -> None:
+    with path.open("a") as marker:
+        marker.write(entry + "\n")
 
 
 if __name__ == "__main__":

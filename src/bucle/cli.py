@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import json
+import random
 import shlex
 import subprocess
 from dataclasses import dataclass
@@ -16,8 +16,8 @@ import typer
 VALID_STATUSES = {"success", "failure", "uncompleted"}
 PROMPT_PLACEHOLDER = "{{prompt}}"
 BUCLE_DIR = ".bucle"
-SUCCESS_MARKER = "success.json"
-FAILURE_MARKER = "failure.json"
+SUCCESS_MARKER = "success.txt"
+FAILURE_MARKER = "failure.txt"
 
 app = typer.Typer(help="Run agent tasks from a .bucle.toml file.")
 
@@ -92,6 +92,11 @@ def run(
         "--reverse",
         help="Run pending tasks from last to first.",
     ),
+    shuffle: bool = typer.Option(
+        False,
+        "--shuffle",
+        help="Run pending tasks in random order.",
+    ),
     verbose: bool = typer.Option(
         False,
         "--verbose",
@@ -102,7 +107,9 @@ def run(
     """Run pending tasks and reconcile marker files into the TOML config."""
     try:
         bucle_config = load_config(config)
-        ran_tasks = run_pending_tasks(bucle_config, reverse=reverse, verbose=verbose)
+        ran_tasks = run_pending_tasks(
+            bucle_config, reverse=reverse, shuffle=shuffle, verbose=verbose
+        )
         reconcile_results(bucle_config, ran_tasks)
     except ConfigError as error:
         typer.echo(f"Invalid config: {error}", err=True)
@@ -236,15 +243,20 @@ def validate_config(config: BucleConfig) -> None:
 
 
 def run_pending_tasks(
-    config: BucleConfig, reverse: bool = False, verbose: bool = False
+    config: BucleConfig,
+    reverse: bool = False,
+    shuffle: bool = False,
+    verbose: bool = False,
 ) -> list[RunTask]:
     config.output_dir.mkdir(exist_ok=True)
-    write_json_array(config.success_marker, [])
-    write_json_array(config.failure_marker, [])
+    config.success_marker.write_text("")
+    config.failure_marker.write_text("")
 
     pending_tasks = get_pending_tasks(config)
     if reverse:
         pending_tasks.reverse()
+    if shuffle:
+        random.shuffle(pending_tasks)
     console = Console() if verbose else None
     total_tasks = len(pending_tasks)
     for task_number, task in enumerate(pending_tasks, start=1):
@@ -399,13 +411,11 @@ def completion_contract(config: BucleConfig, task: RunTask) -> str:
     return (
         "Bucle completion contract:\n"
         f"- Do not edit {config.path.name}.\n"
-        f"- When task '{task.name}' succeeds, update {BUCLE_DIR}/{SUCCESS_MARKER} "
-        f"as a JSON array containing {{\"name\": \"{task.name}\"}}.\n"
-        f"- When task '{task.name}' fails, update {BUCLE_DIR}/{FAILURE_MARKER} "
-        "as a JSON array containing "
-        f"{{\"name\": \"{task.name}\", \"reason\": \"<reason>\"}}.\n"
+        f"- When task '{task.name}' succeeds, run: "
+        f"echo \"{task.name}\" >> {BUCLE_DIR}/{SUCCESS_MARKER}.\n"
+        f"- When task '{task.name}' fails, run: "
+        f"echo \"{task.name},<reason>\" >> {BUCLE_DIR}/{FAILURE_MARKER}.\n"
         "- Update exactly one marker file for this task.\n"
-        "- Preserve valid JSON arrays when writing marker files.\n"
         "- Valid final TOML statuses are: success, failure, uncompleted."
     )
 
@@ -464,31 +474,22 @@ def format_utc_timestamp(value: datetime) -> str:
 
 
 def read_marker_entries(path: Path, marker_name: str) -> list[dict[str, Any]]:
-    try:
-        data = json.loads(path.read_text())
-    except json.JSONDecodeError as error:
-        raise ConfigError(f"{path} is not valid JSON: {error}") from error
-
-    if not isinstance(data, list):
-        raise ConfigError(f"{path} must contain a JSON array")
-
     entries: list[dict[str, Any]] = []
-    for index, entry in enumerate(data):
-        if not isinstance(entry, dict):
-            raise ConfigError(f"{path}[{index}] must be an object")
-        name = entry.get("name")
-        if not isinstance(name, str) or not name:
-            raise ConfigError(f"{path}[{index}].name must be a non-empty string")
+    for index, raw_line in enumerate(path.read_text().splitlines()):
+        line = raw_line.strip()
+        if not line:
+            continue
         if marker_name == "failure":
-            reason = entry.get("reason")
-            if reason is not None and not isinstance(reason, str):
-                raise ConfigError(f"{path}[{index}].reason must be a string")
+            name, separator, reason = line.partition(",")
+            if not name:
+                raise ConfigError(f"{path}:{index + 1} must start with a task name")
+            entry = {"name": name}
+            if separator and reason:
+                entry["reason"] = reason
+        else:
+            entry = {"name": line}
         entries.append(entry)
     return entries
-
-
-def write_json_array(path: Path, value: list[Any]) -> None:
-    path.write_text(json.dumps(value, indent=2) + "\n")
 
 
 def cleanup_marker(path: Path) -> None:

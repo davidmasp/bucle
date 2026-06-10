@@ -60,7 +60,7 @@ auto-reset = true
 bucle check   [--config / -c]       Validate the config file
 bucle tasks   [--config / -c]       List tasks in a Rich table
 bucle list    [--config / -c]       Alias for `bucle tasks`
-bucle run     [--config / -c] [--reverse] [-v]  Run pending tasks and reconcile results
+bucle run     [--config / -c] [--reverse] [--shuffle] [-v]  Run pending tasks and reconcile results
 bucle reset   <task-name> [-c]      Reset a task to pending
 bucle reset   --auto [-c]           Reset all tasks marked `auto-reset = true`
 ```
@@ -92,8 +92,10 @@ progress count while showing a Rich spinner during agent execution.
 Pass `--reverse` to process pending tasks from last to first (useful when
 adding new tasks that should run before existing ones).
 
+Pass `--shuffle` to process pending tasks in random order.
+
 1. Creates the `.bucle/` output directory.
-2. Writes empty `success.json` and `failure.json` marker arrays.
+2. Writes empty `success.txt` and `failure.txt` marker files.
 3. Identifies pending tasks (no `status` or status not in `success`/`failure`/`uncompleted`).
 4. For each pending task (in order):
    - Renders the full prompt (preprompt + task context + postprompt + **completion contract**).
@@ -117,22 +119,23 @@ Use `bucle reset --auto` to reset every task with `auto-reset = true`.
 ## Completion Contract
 
 Every agent prompt includes a **completion contract** that instructs the agent
-to signal completion by writing JSON marker files:
+to signal completion by appending to marker files:
 
 | Outcome  | File                            | Contents                                |
 |----------|---------------------------------|-----------------------------------------|
-| Success  | `.bucle/success.json`           | `[{"name": "<task-name>"}]`             |
-| Failure  | `.bucle/failure.json`           | `[{"name": "<task-name>", "reason": "..."}]` |
+| Success  | `.bucle/success.txt`            | `<task-name>`                            |
+| Failure  | `.bucle/failure.txt`            | `<task-name>,<reason>`                   |
 
-The agent must preserve valid JSON arrays and write exactly one marker file.
-Bucle reads these after execution to determine each task's outcome.
+The agent must write exactly one marker file using append redirection, for
+example `echo "<task-name>" >> .bucle/success.txt`. Bucle reads these after
+execution to determine each task's outcome.
 
 ## Output Directory (`.bucle/`)
 
 ```
 .bucle/
-├── success.json          # (temporary) success markers during a run
-├── failure.json          # (temporary) failure markers during a run
+├── success.txt           # (temporary) success markers during a run
+├── failure.txt           # (temporary) failure markers during a run
 └── <timestamp>_<task>.<agent>.log   # per-task execution logs
 ```
 

@@ -1,13 +1,23 @@
-# bucle
+# 🔁 bucle
 
-Run a sequential agent loop from a `.bucle.toml` config file. **bucle** reads
+Run a sequential agent loop from a `.bucle.toml` config file. **bucle** (pronounced as `/ˈbu.klə/` from the catalan word for "loop") reads
 pending tasks, shells out to an external AI agent (Codex, OpenCode, etc.) for
 each one, and records the result back into the TOML config via a completion
 contract protocol.
 
 ## Installation
 
+Install directly from git:
+
 ```sh
+uv tool install git+https://git.repo.git/davidmasp/bucle
+```
+
+Or clone the repository for local development:
+
+```sh
+git clone https://git.repo.git/davidmasp/bucle.git
+cd bucle
 uv sync
 ```
 
@@ -58,9 +68,9 @@ auto-reset = true
 
 ```
 bucle check   [--config / -c]       Validate the config file
-bucle tasks   [--config / -c]       List tasks in a Rich table
-bucle list    [--config / -c]       Alias for `bucle tasks`
-bucle run     [--config / -c] [--reverse] [--shuffle] [-v]  Run pending tasks and reconcile results
+bucle tasks   [--config / -c] [--limit N]       List tasks in a Rich table
+bucle list    [--config / -c] [--limit N]       Alias for `bucle tasks`
+bucle run     [--config / -c] [--reverse] [--shuffle] [--limit N] [-v]  Run pending tasks and reconcile results
 bucle reset   <task-name> [-c]      Reset a task to pending
 bucle reset   --auto [-c]           Reset all tasks marked `auto-reset = true`
 ```
@@ -76,6 +86,8 @@ placeholder.
 ### `bucle tasks` / `bucle list`
 
 Prints a Rich table with task index, name, agent, and emoji status:
+
+Pass `--limit N` to list only the first `N` configured tasks.
 
 | Emoji | Status       |
 |-------|--------------|
@@ -93,6 +105,9 @@ Pass `--reverse` to process pending tasks from last to first (useful when
 adding new tasks that should run before existing ones).
 
 Pass `--shuffle` to process pending tasks in random order.
+
+Pass `--limit N` to run only the first `N` pending tasks after applying
+`--reverse` or `--shuffle` ordering.
 
 1. Creates the `.bucle/` output directory.
 2. Writes empty `success.txt` and `failure.txt` marker files.

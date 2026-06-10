@@ -186,6 +186,28 @@ class RunReconciliationTest(unittest.TestCase):
 
         self.assertEqual([task.name for task in ran_tasks], ["task3", "task2", "task1"])
 
+    def test_limit_runs_after_reverse_ordering(self) -> None:
+        config_text = (
+            config_for_fake_agent("none")
+            + """
+
+            [[tasks]]
+            name = "task2"
+            agent = "fake"
+            prompt = "Do task two"
+
+            [[tasks]]
+            name = "task3"
+            agent = "fake"
+            prompt = "Do task three"
+            """
+        )
+        with temp_config(config_text) as config_path:
+            config = load_config(config_path)
+            ran_tasks = run_pending_tasks(config, reverse=True, limit=2)
+
+        self.assertEqual([task.name for task in ran_tasks], ["task3", "task2"])
+
     def test_shuffle_runs_pending_tasks_in_random_order(self) -> None:
         config_text = (
             config_for_fake_agent("none")
@@ -343,6 +365,30 @@ class TaskListTest(unittest.TestCase):
         self.assertEqual(tasks_result.exit_code, 0)
         self.assertEqual(list_result.exit_code, 0)
         self.assertEqual(list_result.output, tasks_result.output)
+
+    def test_list_limit_caps_listed_tasks(self) -> None:
+        config_text = (
+            VALID_CONFIG.format(cmd="echo {{prompt}}")
+            + """
+
+            [[tasks]]
+            name = "task2"
+            agent = "fake"
+            prompt = "Do task two"
+
+            [[tasks]]
+            name = "task3"
+            agent = "fake"
+            prompt = "Do task three"
+            """
+        )
+        with temp_config(config_text) as config_path:
+            result = runner.invoke(app, ["list", "--config", str(config_path), "--limit", "2"])
+
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("task1", result.output)
+        self.assertIn("task2", result.output)
+        self.assertNotIn("task3", result.output)
 
 
 def config_for_fake_agent(mode: str) -> str:

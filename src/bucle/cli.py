@@ -103,12 +103,21 @@ def run(
         "-v",
         help="Print task launch details while running.",
     ),
+    limit: int | None = typer.Option(
+        None,
+        "--limit",
+        help="Maximum number of pending tasks to run.",
+    ),
 ) -> None:
     """Run pending tasks and reconcile marker files into the TOML config."""
     try:
         bucle_config = load_config(config)
         ran_tasks = run_pending_tasks(
-            bucle_config, reverse=reverse, shuffle=shuffle, verbose=verbose
+            bucle_config,
+            reverse=reverse,
+            shuffle=shuffle,
+            verbose=verbose,
+            limit=limit,
         )
         reconcile_results(bucle_config, ran_tasks)
     except ConfigError as error:
@@ -161,6 +170,11 @@ def tasks(
         "-c",
         help="Path to the .bucle.toml file.",
     ),
+    limit: int | None = typer.Option(
+        None,
+        "--limit",
+        help="Maximum number of tasks to list.",
+    ),
 ) -> None:
     """List configured tasks and their current status."""
     try:
@@ -169,7 +183,7 @@ def tasks(
         typer.echo(f"Invalid config: {error}", err=True)
         raise typer.Exit(1) from error
 
-    print_tasks(bucle_config)
+    print_tasks(bucle_config, limit=limit)
 
 
 def load_config(path: Path) -> BucleConfig:
@@ -247,7 +261,9 @@ def run_pending_tasks(
     reverse: bool = False,
     shuffle: bool = False,
     verbose: bool = False,
+    limit: int | None = None,
 ) -> list[RunTask]:
+    validate_limit(limit)
     config.output_dir.mkdir(exist_ok=True)
     config.success_marker.write_text("")
     config.failure_marker.write_text("")
@@ -257,6 +273,8 @@ def run_pending_tasks(
         pending_tasks.reverse()
     if shuffle:
         random.shuffle(pending_tasks)
+    if limit is not None:
+        pending_tasks = pending_tasks[:limit]
     console = Console() if verbose else None
     total_tasks = len(pending_tasks)
     for task_number, task in enumerate(pending_tasks, start=1):
@@ -336,14 +354,18 @@ def reset_auto_tasks(config: BucleConfig) -> int:
     return reset_count
 
 
-def print_tasks(config: BucleConfig) -> None:
+def print_tasks(config: BucleConfig, limit: int | None = None) -> None:
+    validate_limit(limit)
     table = Table(title=f"Tasks for {config.document['metadata']['name']}")
     table.add_column("#", justify="right", style="dim")
     table.add_column("Task", style="bold")
     table.add_column("Agent", style="cyan")
     table.add_column("Status")
 
-    for index, task in enumerate(config.document["tasks"], start=1):
+    tasks = config.document["tasks"]
+    if limit is not None:
+        tasks = tasks[:limit]
+    for index, task in enumerate(tasks, start=1):
         status_text, status_style = format_task_status(task)
         table.add_row(
             str(index),
@@ -384,6 +406,11 @@ def get_pending_tasks(config: BucleConfig) -> list[RunTask]:
             )
         )
     return pending_tasks
+
+
+def validate_limit(limit: int | None) -> None:
+    if limit is not None and limit < 0:
+        raise ConfigError("limit must be greater than or equal to 0")
 
 
 def render_command(config: BucleConfig, task: RunTask) -> str:

@@ -18,6 +18,31 @@ cmd = "opencode run --model openai/gpt-5.5 {{prompt}}"
 
 ## we need to include some sort of git integration but we are not sure how to do it, we could do it in the agent itself, but maybe it's better to do it in the tool. For instance, after every task, we could commit the changes with a random message. We could even generate the commit message with the external LLM handled by bucle itself, for instance, we could have a API call like "generate commit message" that would take as input the name of the task and the status (success or failure) and then it would generate a commit message that we could use for the commit.
 
+[[tasks]]
+name = "add-install-from-gitrepo"
+agent = "opencode"
+prompt = """
+README.md:8-12
+
+This installation is not great because it s in clone first and install later for development. I want to improve the installation script to include the option to install driectly from git. I have no repo yest but I want to have the placeholder git.repo.git/davidmasp/bucle.
+
+Use the uv tool installation from a git URL.
+
+Leave the local instructions but include a "git clone" command too.
+
+"""
+status = "success"
+
+
+[[tasks]]
+name = "limit-flag"
+agent = "opencode"
+prompt = """
+add a limit flag into the bucle list and bucle run command. This should contain a integer number. When using the flag, the execution should limit, either the listed number of tasks or the number of executed files to this number.
+
+In the run mode, ideally I want to do this after the re-ordering of the tasks, so first i would either reverse them or shuffle them and after that limit to the first XX from the limit flag.
+"""
+status = "success"
 
 [[tasks]]
 name = "json-to-list"
@@ -39,17 +64,24 @@ The name of the flag is --shuffle
 """
 status = "success"
 
+[[tasks]]
+name = "task3"
+agent = "bigpickle"
+prompt = "this task is a test to fail, report failure and exit"
+auto-reset = true
+status = "failure"
+failure_reason = "test task designed to fail"
 
 [[tasks]]
 name = "task2"
-agent = "codexmini"
+agent = "bigpickle"
 prompt = "say hi!"
 auto-reset = true
 status = "success"
 
 [[tasks]]
 name = "task1"
-agent = "codexmini"
+agent = "bigpickle"
 prompt = "say bye!"
 auto-reset = true
 status = "success"

@@ -26,6 +26,7 @@ cmd = "codex exec {{prompt}}"
 name = "task1"
 agent = "codex"
 prompt = "say hi!"
+auto-reset = true
 ```
 
 ### `[metadata]`
@@ -49,16 +50,19 @@ prompt = "say hi!"
 | `name`           | Unique task identifier                           |
 | `agent`          | References a named agent                         |
 | `prompt`         | Instruction sent to the agent                    |
+| `auto-reset`     | Optional boolean; reset by `bucle reset --auto`  |
 | `status`         | (managed by bucle) `success`, `failure`, `uncompleted` |
 | `failure_reason` | (managed by bucle) Human-readable failure reason |
 
 ## Commands
 
 ```
-bucle check   [--config / -c]    Validate the config file
-bucle tasks   [--config / -c]    List tasks in a Rich table (alias: `bucle list`)
-bucle run     [--config / -c]    Run pending tasks and reconcile results
-bucle reset   <task-name> [-c]   Reset a task to pending
+bucle check   [--config / -c]       Validate the config file
+bucle tasks   [--config / -c]       List tasks in a Rich table
+bucle list    [--config / -c]       Alias for `bucle tasks`
+bucle run     [--config / -c] [--reverse] [-v]  Run pending tasks and reconcile results
+bucle reset   <task-name> [-c]      Reset a task to pending
+bucle reset   --auto [-c]           Reset all tasks marked `auto-reset = true`
 ```
 
 All commands accept `--config / -c` (defaults to `.bucle.toml`).
@@ -82,6 +86,12 @@ Prints a Rich table with task index, name, agent, and emoji status:
 
 ### `bucle run`
 
+Pass `--verbose` / `-v` to print each launched task name, log file path, and
+progress count while showing a Rich spinner during agent execution.
+
+Pass `--reverse` to process pending tasks from last to first (useful when
+adding new tasks that should run before existing ones).
+
 1. Creates the `.bucle/` output directory.
 2. Writes empty `success.json` and `failure.json` marker arrays.
 3. Identifies pending tasks (no `status` or status not in `success`/`failure`/`uncompleted`).
@@ -101,6 +111,8 @@ writes a failure marker get `status = "failure"` and an optional
 
 Removes `status` and `failure_reason` from the named task so it is treated as
 pending on the next `bucle run`.
+
+Use `bucle reset --auto` to reset every task with `auto-reset = true`.
 
 ## Completion Contract
 

@@ -17,6 +17,7 @@ from bucle.cli import (
     format_task_status,
     load_config,
     reconcile_results,
+    reset_auto_tasks,
     render_prompt,
     reset_task,
     run_pending_tasks,
@@ -97,6 +98,12 @@ class ConfigValidationTest(unittest.TestCase):
             with self.assertRaisesRegex(ConfigError, "status"):
                 load_config(config_path)
 
+    def test_invalid_auto_reset_fails(self) -> None:
+        config = VALID_CONFIG.format(cmd="echo {{prompt}}") + '\nauto-reset = "yes"\n'
+        with temp_config(config) as config_path:
+            with self.assertRaisesRegex(ConfigError, "auto-reset"):
+                load_config(config_path)
+
 
 class PromptRenderingTest(unittest.TestCase):
     def test_prompt_contains_expected_contract(self) -> None:
@@ -157,6 +164,40 @@ class RunReconciliationTest(unittest.TestCase):
             self.assertEqual(ran_tasks, [])
             self.assertEqual(list((config_path.parent / ".bucle").glob("*.log")), [])
 
+    def test_reverse_runs_pending_tasks_from_last_to_first(self) -> None:
+        config_text = (
+            config_for_fake_agent("none")
+            + """
+
+            [[tasks]]
+            name = "task2"
+            agent = "fake"
+            prompt = "Do task two"
+
+            [[tasks]]
+            name = "task3"
+            agent = "fake"
+            prompt = "Do task three"
+            """
+        )
+        with temp_config(config_text) as config_path:
+            config = load_config(config_path)
+            ran_tasks = run_pending_tasks(config, reverse=True)
+
+        self.assertEqual([task.name for task in ran_tasks], ["task3", "task2", "task1"])
+
+    def test_run_verbose_prints_launch_details(self) -> None:
+        with temp_config(config_for_fake_agent("success")) as config_path:
+            result = runner.invoke(
+                app,
+                ["run", "--config", str(config_path), "--verbose"],
+            )
+
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("Launching task 1/1: task1", result.output)
+        self.assertIn(str(config_path.parent / ".bucle"), result.output)
+        self.assertIn("task1.fake.log", result.output)
+
     def assert_log_contains(self, root: Path, *needles: str) -> None:
         logs = list((root / ".bucle").glob("*.log"))
         self.assertEqual(len(logs), 1)
@@ -185,6 +226,44 @@ class ResetTaskTest(unittest.TestCase):
 
             with self.assertRaisesRegex(ConfigError, "task not found: missing"):
                 reset_task(config, "missing")
+
+    def test_reset_auto_tasks_removes_status_from_marked_tasks(self) -> None:
+        config_text = (
+            VALID_CONFIG.format(cmd="echo {{prompt}}")
+            + """
+            status = "success"
+            auto-reset = true
+
+            [[tasks]]
+            name = "task2"
+            agent = "fake"
+            prompt = "Do task two"
+            status = "failure"
+            failure_reason = "bad result"
+            """
+        )
+        with temp_config(config_text) as config_path:
+            config = load_config(config_path)
+            reset_count = reset_auto_tasks(config)
+
+            document = tomlkit.parse(config_path.read_text())
+            self.assertEqual(reset_count, 1)
+            self.assertNotIn("status", document["tasks"][0])
+            self.assertEqual(document["tasks"][1]["status"], "failure")
+            self.assertEqual(document["tasks"][1]["failure_reason"], "bad result")
+
+    def test_reset_auto_cli_does_not_require_task_name(self) -> None:
+        config_text = VALID_CONFIG.format(cmd="echo {{prompt}}") + """
+        status = "success"
+        auto-reset = true
+        """
+        with temp_config(config_text) as config_path:
+            result = runner.invoke(app, ["reset", "--auto", "--config", str(config_path)])
+
+            document = tomlkit.parse(config_path.read_text())
+            self.assertEqual(result.exit_code, 0)
+            self.assertIn("Reset auto-reset task(s): 1", result.output)
+            self.assertNotIn("status", document["tasks"][0])
 
 
 class TaskListTest(unittest.TestCase):

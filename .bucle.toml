@@ -16,10 +16,40 @@ cmd = "opencode run --model opencode/big-pickle {{prompt}}"
 cmd = "opencode run --model openai/gpt-5.5 {{prompt}}"
 
 
+## we need to include some sort of git integration but we are not sure how to do it, we could do it in the agent itself, but maybe it's better to do it in the tool. For instance, after every task, we could commit the changes with a random message. We could even generate the commit message with the external LLM handled by bucle itself, for instance, we could have a API call like "generate commit message" that would take as input the name of the task and the status (success or failure) and then it would generate a commit message that we could use for the commit.
+
+
+[[tasks]]
+name = "json-to-list"
+agent = "opencode"
+prompt = """
+I need to change the way the agent reports the success of failures of the task. Currently it tries to re-create the json file but there are issues when the first task is already in the file, sometimes it deletes it. I want the agent to append into a list instead. Using a echo command. For instance, echo "name of task" >> .bucle/success.txt or for failure we should do echo "<name of task>,<failure reason>" >> .bucle/failure.txt.
+
+The rest of the logic stays the same so the bucle tool will remove the failure/success files after every run.
+"""
+
+[[tasks]]
+name = "shuffle-flag"
+agent = "opencode"
+prompt = """
+Create a shuffle order, so instead of reverse or normal order the tasks are passed through in a random order. the rest of the logic stays the same.
+
+The name of the flag is --shuffle
+"""
+
+
+[[tasks]]
+name = "task2"
+agent = "codexmini"
+prompt = "say hi!"
+auto-reset = true
+status = "success"
+
 [[tasks]]
 name = "task1"
 agent = "codexmini"
-prompt = "say hi!"
+prompt = "say bye!"
+auto-reset = true
 status = "success"
 
 [[tasks]]
@@ -38,12 +68,15 @@ status = "success"
 [[tasks]]
 name = "reverse-mode"
 agent = "opencode"
-prompt = "in the bucle run command, add a --reverse flag. If true, the first task to implement will be the last in the list." 
+prompt = "in the bucle run command, add a --reverse flag. If true, the first task to implement will be the last in the list."
+status = "success"
+
 
 [[tasks]]
 name = "more-verbose"
 agent = "opencode"
 prompt = "I need to be more verbose when launching a task, for now something similar would be fine, include the name of the task that got launched, the path of the log file and the X out of Y tasks. If rich library includes a spinner, also add it to the mix. I want the runner option"
+status = "success"
 
 [[tasks]]
 name = "auto-reset-tasks"
@@ -55,10 +88,10 @@ I want to add an extra argument value in the task definition. This will be a opt
 This extra value will be "auto-reset" and it will mean that a particular task is auto-reset when invoking the commad uv run bucle reset (wiht the additional flag --auto)
 
 """
+status = "success"
 
 [[tasks]]
 name = "readme-update"
 agent = "bigpickle"
 prompt = "Check the codebase of this folder, then read the README file. Update it according to the newer functionality available"
-
-
+status = "success"

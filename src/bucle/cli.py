@@ -87,11 +87,22 @@ def run(
         "-c",
         help="Path to the .bucle.toml file.",
     ),
+    reverse: bool = typer.Option(
+        False,
+        "--reverse",
+        help="Run pending tasks from last to first.",
+    ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Print task launch details while running.",
+    ),
 ) -> None:
     """Run pending tasks and reconcile marker files into the TOML config."""
     try:
         bucle_config = load_config(config)
-        ran_tasks = run_pending_tasks(bucle_config)
+        ran_tasks = run_pending_tasks(bucle_config, reverse=reverse, verbose=verbose)
         reconcile_results(bucle_config, ran_tasks)
     except ConfigError as error:
         typer.echo(f"Invalid config: {error}", err=True)
@@ -102,23 +113,36 @@ def run(
 
 @app.command()
 def reset(
-    task_name: str = typer.Argument(..., help="Name of the task to reset."),
+    task_name: str | None = typer.Argument(None, help="Name of the task to reset."),
     config: Path = typer.Option(
         Path(".bucle.toml"),
         "--config",
         "-c",
         help="Path to the .bucle.toml file.",
     ),
+    auto: bool = typer.Option(
+        False,
+        "--auto",
+        help="Reset all tasks marked with auto-reset = true.",
+    ),
 ) -> None:
     """Reset a task so it can be run again."""
     try:
         bucle_config = load_config(config)
-        reset_task(bucle_config, task_name)
+        if auto:
+            reset_count = reset_auto_tasks(bucle_config)
+        else:
+            if task_name is None:
+                raise ConfigError("task name is required unless --auto is used")
+            reset_task(bucle_config, task_name)
     except ConfigError as error:
         typer.echo(f"Invalid config: {error}", err=True)
         raise typer.Exit(1) from error
 
-    typer.echo(f"Reset task: {task_name}")
+    if auto:
+        typer.echo(f"Reset auto-reset task(s): {reset_count}")
+    else:
+        typer.echo(f"Reset task: {task_name}")
 
 
 @app.command("list")
@@ -206,26 +230,38 @@ def validate_config(config: BucleConfig) -> None:
                 f"{', '.join(sorted(VALID_STATUSES))}"
             )
 
+        auto_reset = task.get("auto-reset")
+        if auto_reset is not None and not isinstance(auto_reset, bool):
+            raise ConfigError(f"tasks[{index}].auto-reset must be a boolean")
 
-def run_pending_tasks(config: BucleConfig) -> list[RunTask]:
+
+def run_pending_tasks(
+    config: BucleConfig, reverse: bool = False, verbose: bool = False
+) -> list[RunTask]:
     config.output_dir.mkdir(exist_ok=True)
     write_json_array(config.success_marker, [])
     write_json_array(config.failure_marker, [])
 
     pending_tasks = get_pending_tasks(config)
-    for task in pending_tasks:
+    if reverse:
+        pending_tasks.reverse()
+    console = Console() if verbose else None
+    total_tasks = len(pending_tasks)
+    for task_number, task in enumerate(pending_tasks, start=1):
         command = render_command(config, task)
         started_at = datetime.now(timezone.utc)
-        result = subprocess.run(  # noqa: S602 - commands are trusted local config.
-            command,
-            cwd=config.root,
-            shell=True,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
+        log_path = task_log_path(config, task, started_at)
+        if console is not None:
+            console.print(
+                f"Launching task {task_number}/{total_tasks}: {task.name} "
+                f"(log: {log_path})"
+            )
+            with console.status(f"Running task {task.name}", spinner="moon"):
+                result = run_task_command(config, command)
+        else:
+            result = run_task_command(config, command)
         ended_at = datetime.now(timezone.utc)
-        write_task_log(config, task, command, started_at, ended_at, result)
+        write_task_log(log_path, task, command, started_at, ended_at, result)
 
     return pending_tasks
 
@@ -272,6 +308,20 @@ def reset_task(config: BucleConfig, task_name: str) -> None:
         return
 
     raise ConfigError(f"task not found: {task_name}")
+
+
+def reset_auto_tasks(config: BucleConfig) -> int:
+    reset_count = 0
+    for task in config.document["tasks"]:
+        if task.get("auto-reset") is not True:
+            continue
+
+        task.pop("status", None)
+        task.pop("failure_reason", None)
+        reset_count += 1
+
+    config.path.write_text(tomlkit.dumps(config.document))
+    return reset_count
 
 
 def print_tasks(config: BucleConfig) -> None:
@@ -361,17 +411,14 @@ def completion_contract(config: BucleConfig, task: RunTask) -> str:
 
 
 def write_task_log(
-    config: BucleConfig,
+    log_path: Path,
     task: RunTask,
     command: str,
     started_at: datetime,
     ended_at: datetime,
     result: subprocess.CompletedProcess[str],
 ) -> None:
-    timestamp = started_at.isoformat(timespec="seconds").replace("+00:00", "Z")
-    safe_timestamp = timestamp.replace(":", "-")
-    log_name = f"{safe_timestamp}_{safe_filename(task.name)}.{safe_filename(task.agent)}.log"
-    log_path = config.output_dir / log_name
+    timestamp = format_utc_timestamp(started_at)
     log_path.write_text(
         "\n".join(
             [
@@ -390,6 +437,30 @@ def write_task_log(
             ]
         )
     )
+
+
+def run_task_command(
+    config: BucleConfig, command: str
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(  # noqa: S602 - commands are trusted local config.
+        command,
+        cwd=config.root,
+        shell=True,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def task_log_path(config: BucleConfig, task: RunTask, started_at: datetime) -> Path:
+    timestamp = format_utc_timestamp(started_at)
+    safe_timestamp = timestamp.replace(":", "-")
+    log_name = f"{safe_timestamp}_{safe_filename(task.name)}.{safe_filename(task.agent)}.log"
+    return config.output_dir / log_name
+
+
+def format_utc_timestamp(value: datetime) -> str:
+    return value.isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def read_marker_entries(path: Path, marker_name: str) -> list[dict[str, Any]]:

@@ -10,7 +10,11 @@ contract protocol.
 Install directly from git:
 
 ```sh
-uv tool install git+https://git.repo.git/davidmasp/bucle
+# from a gitlab instance
+uv tool install git+https://gitlab.server.org/david.mas/bucle.git
+
+# from github (not there yet)
+uv tool install git+https://github.com/davidmasp/bucle.git
 ```
 
 Or clone the repository for local development:
@@ -68,14 +72,22 @@ auto-reset = true
 
 ```
 bucle check   [--config / -c]       Validate the config file
+bucle init                         Create .bucle/, .bucle.toml, and update .gitignore
 bucle tasks   [--config / -c] [--limit N]       List tasks in a Rich table
 bucle list    [--config / -c] [--limit N]       Alias for `bucle tasks`
+bucle render  [--config / -c]       Render .bucle/index.html and per-log HTML pages
 bucle run     [--config / -c] [--reverse] [--shuffle] [--limit N] [-v]  Run pending tasks and reconcile results
 bucle reset   <task-name> [-c]      Reset a task to pending
 bucle reset   --auto [-c]           Reset all tasks marked `auto-reset = true`
 ```
 
 All commands accept `--config / -c` (defaults to `.bucle.toml`).
+
+### `bucle init`
+
+Creates an empty `.bucle/` directory, appends `.bucle/` to `.gitignore`, and
+writes a starter `.bucle.toml`. The command fails if `.gitignore` is missing or
+`.bucle.toml` already exists.
 
 ### `bucle check`
 
@@ -130,6 +142,16 @@ Removes `status` and `failure_reason` from the named task so it is treated as
 pending on the next `bucle run`.
 
 Use `bucle reset --auto` to reset every task with `auto-reset = true`.
+
+### `bucle render`
+
+Reads `.bucle.toml`, scans `.bucle/*.log`, renders one report at
+`.bucle/index.html`, and writes one HTML view next to each log file using the
+same filename with a `.html` extension.
+
+The main report shows each configured task with its name, agent, status,
+prompt, and matching log files. Logs appear in a dropdown on each task card
+with buttons to copy the raw log path or open the rendered log view.
 
 ## Completion Contract
 

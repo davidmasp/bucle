@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import subprocess
 import sys
 import tempfile
@@ -14,10 +15,13 @@ from typer.testing import CliRunner
 from bucle.cli import (
     ConfigError,
     app,
+    collect_log_files,
     format_task_status,
+    init_project,
     load_config,
     reconcile_results,
     reset_auto_tasks,
+    render_site,
     render_prompt,
     reset_task,
     run_pending_tasks,
@@ -119,6 +123,92 @@ class PromptRenderingTest(unittest.TestCase):
         self.assertIn('echo "task1" >> .bucle/success.txt', prompt)
         self.assertIn('echo "task1,<reason>" >> .bucle/failure.txt', prompt)
         self.assertIn("success, failure, uncompleted", prompt)
+
+
+class InitProjectTest(unittest.TestCase):
+    def test_init_creates_bucle_files_and_updates_gitignore(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / ".gitignore").write_text("__pycache__/\n")
+
+            init_project(root)
+
+            self.assertTrue((root / ".bucle").is_dir())
+            self.assertIn(".bucle/", (root / ".gitignore").read_text().splitlines())
+
+            config = load_config(root / ".bucle.toml")
+            self.assertEqual(config.document["metadata"]["name"], "my-project")
+            self.assertEqual(len(config.document["tasks"]), 2)
+            self.assertEqual(config.document["tasks"][0]["name"], "task1")
+            self.assertEqual(config.document["tasks"][1]["name"], "task2")
+
+    def test_init_fails_without_gitignore(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+
+            with self.assertRaisesRegex(ConfigError, ".gitignore does not exist"):
+                init_project(root)
+
+            self.assertFalse((root / ".bucle").exists())
+            self.assertFalse((root / ".bucle.toml").exists())
+
+    def test_init_does_not_duplicate_gitignore_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / ".gitignore").write_text(".bucle/\n")
+
+            init_project(root)
+
+            self.assertEqual((root / ".gitignore").read_text(), ".bucle/\n")
+
+    def test_init_cli_reports_success(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / ".gitignore").write_text("")
+
+            with patch("bucle.cli.Path.cwd", return_value=root):
+                result = runner.invoke(app, ["init"])
+
+            self.assertEqual(result.exit_code, 0)
+            self.assertIn("Initialized bucle project.", result.output)
+
+
+class RenderReportTest(unittest.TestCase):
+    def test_collect_log_files_extracts_metadata_from_filename(self) -> None:
+        with temp_config(VALID_CONFIG.format(cmd="echo {{prompt}}")) as config_path:
+            bucle_dir = config_path.parent / ".bucle"
+            bucle_dir.mkdir()
+            log_path = bucle_dir / "2026-06-11T13-53-32Z_task1.fake.log"
+            log_path.write_text("stdout:\nhello\n")
+
+            logs = collect_log_files(load_config(config_path))
+
+        self.assertEqual(len(logs), 1)
+        self.assertEqual(logs[0].task_name, "task1")
+        self.assertEqual(logs[0].agent, "fake")
+        self.assertEqual(logs[0].display_date, "2026-06-11 13:53:32 UTC")
+        self.assertEqual(logs[0].html_filename, "2026-06-11T13-53-32Z_task1.fake.html")
+
+    @unittest.skipUnless(importlib.util.find_spec("jinja2"), "requires jinja2")
+    def test_render_site_writes_index_and_log_html(self) -> None:
+        with temp_config(VALID_CONFIG.format(cmd="echo {{prompt}}")) as config_path:
+            bucle_dir = config_path.parent / ".bucle"
+            bucle_dir.mkdir()
+            log_path = bucle_dir / "2026-06-11T13-53-32Z_task1.fake.log"
+            log_path.write_text("stdout:\nhello <world>\n")
+
+            report_path = render_site(load_config(config_path))
+
+            index_html = report_path.read_text()
+            log_html = log_path.with_suffix(".html").read_text()
+
+        self.assertEqual(report_path.name, "index.html")
+        self.assertIn("task1", index_html)
+        self.assertIn("Do task one", index_html)
+        self.assertIn("Copy path", index_html)
+        self.assertIn("Visualize", index_html)
+        self.assertIn("2026-06-11T13-53-32Z_task1.fake.html", index_html)
+        self.assertIn("hello &lt;world&gt;", log_html)
 
 
 class RunReconciliationTest(unittest.TestCase):

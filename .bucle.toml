@@ -15,8 +15,46 @@ cmd = "opencode run --model opencode/big-pickle {{prompt}}"
 [agents.opencode]
 cmd = "opencode run --model openai/gpt-5.5 {{prompt}}"
 
-
 ## we need to include some sort of git integration but we are not sure how to do it, we could do it in the agent itself, but maybe it's better to do it in the tool. For instance, after every task, we could commit the changes with a random message. We could even generate the commit message with the external LLM handled by bucle itself, for instance, we could have a API call like "generate commit message" that would take as input the name of the task and the status (success or failure) and then it would generate a commit message that we could use for the commit.
+
+[[tasks]]
+name = "bucle-init-command-justfile"
+agent = "opencode"
+prompt = """
+For the bucle init command, we should also check if there is a Justfile in the directory where we are running it. If there is one, then append a rule to the Justfile. If there is none, do nothing.
+
+It should be smth like:
+
+# runs bucle tasks
+bucle:
+    bucle run --reverse -v
+
+# lists bucle tasks
+bucle-list:
+    bucle list
+
+"""
+
+[[tasks]]
+name = "bucle-render-commad"
+agent = "codex"
+prompt = """
+I want to include a render subcommand, this should read the .bucle .toml file, and parse the .bucle/ folder. Then for the entire list of tasks it shouldl render a HTML file (use a template and jinja2). The HTML file should contain the name of the task and the prompt, status, agent etc.
+
+For each log file in the .bucle directory we should also render a basic HTML, much simpler, and locate it in the same folder with the same name, just .html extension. The contents of the file should be MONO font but there should be some header that tells us about the task name and date, everything should be extractible from the filename.
+
+In addition to the info already present in the TOML file, the main page should also include the log files. This should be in a dropdown menu in each task "card". This log files should contain two botton options, a copy path button and a visualize button. The visualize one should lead to the HTML file rendered for that log file, and the copy path should copy the path of the log file to the clipboard.
+
+"""
+status = "success"
+
+[[tasks]]
+name = "bucle-init-command"
+agent = "opencode"
+prompt = """
+I want to include a init subcommand, this should create a empty .bucle folder, append the .bucle folder to the .gitignore (fail if there is no gitignore file) and then create a small .bucle.toml file with the basic structure and a couple of tasks. Get inspiration from the task1, 2 and 3 in this repository.
+"""
+status = "success"
 
 [[tasks]]
 name = "add-install-from-gitrepo"

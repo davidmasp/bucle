@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+import re
 import shlex
 import subprocess
 from dataclasses import dataclass
@@ -18,6 +19,30 @@ PROMPT_PLACEHOLDER = "{{prompt}}"
 BUCLE_DIR = ".bucle"
 SUCCESS_MARKER = "success.txt"
 FAILURE_MARKER = "failure.txt"
+HTML_REPORT = "index.html"
+LOG_FILENAME_PATTERN = re.compile(
+    r"^(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z)_"
+    r"(?P<task>.+)\.(?P<agent>[^.]+)\.log$"
+)
+DEFAULT_INIT_CONFIG = """[metadata]
+name = "my-project"
+preprompt = "You are a helpful assistant."
+postprompt = " "
+
+[agents.codex]
+cmd = "codex exec {{prompt}}"
+
+[[tasks]]
+name = "task1"
+agent = "codex"
+prompt = "Make a small, safe improvement and report success."
+
+[[tasks]]
+name = "task2"
+agent = "codex"
+prompt = "Add or update a focused test for the previous change."
+auto-reset = true
+"""
 
 app = typer.Typer(help="Run agent tasks from a .bucle.toml file.")
 
@@ -56,8 +81,34 @@ class RunTask:
     index: int
 
 
+@dataclass(frozen=True)
+class BucleLog:
+    path: Path
+    html_path: Path
+    filename: str
+    html_filename: str
+    absolute_path: str
+    task_name: str
+    agent: str
+    timestamp: str
+    display_date: str
+    contents: str
+
+
 def main() -> None:
     app()
+
+
+@app.command()
+def init() -> None:
+    """Create the default bucle files in the current directory."""
+    try:
+        init_project(Path.cwd())
+    except ConfigError as error:
+        typer.echo(f"Init failed: {error}", err=True)
+        raise typer.Exit(1) from error
+
+    typer.echo("Initialized bucle project.")
 
 
 @app.command()
@@ -186,6 +237,26 @@ def tasks(
     print_tasks(bucle_config, limit=limit)
 
 
+@app.command()
+def render(
+    config: Path = typer.Option(
+        Path(".bucle.toml"),
+        "--config",
+        "-c",
+        help="Path to the .bucle.toml file.",
+    ),
+) -> None:
+    """Render task and log HTML files into the .bucle directory."""
+    try:
+        bucle_config = load_config(config)
+        report_path = render_site(bucle_config)
+    except ConfigError as error:
+        typer.echo(f"Render failed: {error}", err=True)
+        raise typer.Exit(1) from error
+
+    typer.echo(f"Rendered bucle report: {report_path}")
+
+
 def load_config(path: Path) -> BucleConfig:
     resolved_path = path.expanduser().resolve()
     if not resolved_path.exists():
@@ -201,6 +272,33 @@ def load_config(path: Path) -> BucleConfig:
     config = BucleConfig(path=resolved_path, document=document)
     validate_config(config)
     return config
+
+
+def init_project(root: Path) -> None:
+    gitignore_path = root / ".gitignore"
+    if not gitignore_path.exists():
+        raise ConfigError(".gitignore does not exist")
+    if not gitignore_path.is_file():
+        raise ConfigError(".gitignore is not a file")
+
+    config_path = root / ".bucle.toml"
+    if config_path.exists():
+        raise ConfigError(".bucle.toml already exists")
+
+    bucle_dir = root / BUCLE_DIR
+    bucle_dir.mkdir(exist_ok=True)
+    append_gitignore_entry(gitignore_path, f"{BUCLE_DIR}/")
+    config_path.write_text(DEFAULT_INIT_CONFIG)
+
+
+def append_gitignore_entry(path: Path, entry: str) -> None:
+    text = path.read_text()
+    ignored_entries = {line.strip() for line in text.splitlines()}
+    if entry in ignored_entries or entry.rstrip("/") in ignored_entries:
+        return
+
+    separator = "" if not text or text.endswith("\n") else "\n"
+    path.write_text(f"{text}{separator}{entry}\n")
 
 
 def validate_config(config: BucleConfig) -> None:
@@ -377,6 +475,562 @@ def print_tasks(config: BucleConfig, limit: int | None = None) -> None:
 
     console = Console()
     console.print(table)
+
+
+def render_site(config: BucleConfig) -> Path:
+    config.output_dir.mkdir(exist_ok=True)
+    logs = collect_log_files(config)
+    generated_at = format_utc_timestamp(datetime.now(timezone.utc))
+
+    project_name = str(config.document["metadata"]["name"])
+    for log in logs:
+        log.html_path.write_text(
+            render_html_template(
+                log_template(),
+                {
+                    "project_name": project_name,
+                    "index_href": HTML_REPORT,
+                    "log": log,
+                },
+            ),
+            encoding="utf-8",
+        )
+
+    tasks, unmatched_logs = build_render_tasks(config, logs)
+    report_path = config.output_dir / HTML_REPORT
+    report_path.write_text(
+        render_html_template(
+            main_report_template(),
+            {
+                "project_name": project_name,
+                "config_path": str(config.path),
+                "generated_at": generated_at,
+                "tasks": tasks,
+                "task_count": len(tasks),
+                "log_count": len(logs),
+                "unmatched_logs": unmatched_logs,
+            },
+        ),
+        encoding="utf-8",
+    )
+    return report_path
+
+
+def collect_log_files(config: BucleConfig) -> list[BucleLog]:
+    if not config.output_dir.exists():
+        return []
+
+    logs = []
+    for path in sorted(config.output_dir.glob("*.log"), reverse=True):
+        metadata = parse_log_filename(path)
+        logs.append(
+            BucleLog(
+                path=path,
+                html_path=path.with_suffix(".html"),
+                filename=path.name,
+                html_filename=path.with_suffix(".html").name,
+                absolute_path=str(path.resolve()),
+                task_name=metadata["task_name"],
+                agent=metadata["agent"],
+                timestamp=metadata["timestamp"],
+                display_date=metadata["display_date"],
+                contents=path.read_text(encoding="utf-8", errors="replace"),
+            )
+        )
+    return logs
+
+
+def parse_log_filename(path: Path) -> dict[str, str]:
+    match = LOG_FILENAME_PATTERN.match(path.name)
+    if match is None:
+        stem = path.name.removesuffix(".log")
+        return {
+            "task_name": stem,
+            "agent": "unknown",
+            "timestamp": "unknown",
+            "display_date": "Unknown date",
+        }
+
+    timestamp = match.group("timestamp")
+    return {
+        "task_name": match.group("task"),
+        "agent": match.group("agent"),
+        "timestamp": timestamp,
+        "display_date": display_log_timestamp(timestamp),
+    }
+
+
+def display_log_timestamp(timestamp: str) -> str:
+    raw_timestamp = timestamp.removesuffix("Z")
+    date, separator, time = raw_timestamp.partition("T")
+    if not separator:
+        return timestamp
+    return f"{date} {time.replace('-', ':')} UTC"
+
+
+def build_render_tasks(
+    config: BucleConfig, logs: list[BucleLog]
+) -> tuple[list[dict[str, Any]], list[BucleLog]]:
+    logs_by_task: dict[str, list[BucleLog]] = {}
+    for log in logs:
+        logs_by_task.setdefault(log.task_name, []).append(log)
+
+    matched_log_paths: set[Path] = set()
+    tasks = []
+    for index, task in enumerate(config.document["tasks"], start=1):
+        task_name = str(task["name"])
+        task_logs = unique_logs(
+            logs_by_task.get(safe_filename(task_name), [])
+            + logs_by_task.get(task_name, [])
+        )
+        matched_log_paths.update(log.path for log in task_logs)
+        status = str(task.get("status") or "pending")
+        tasks.append(
+            {
+                "index": index,
+                "name": task_name,
+                "agent": str(task["agent"]),
+                "prompt": str(task["prompt"]),
+                "status": status,
+                "status_class": status_class(status),
+                "failure_reason": task.get("failure_reason"),
+                "auto_reset": task.get("auto-reset") is True,
+                "logs": task_logs,
+            }
+        )
+
+    unmatched_logs = [log for log in logs if log.path not in matched_log_paths]
+    return tasks, unmatched_logs
+
+
+def unique_logs(logs: list[BucleLog]) -> list[BucleLog]:
+    seen_paths: set[Path] = set()
+    unique = []
+    for log in logs:
+        if log.path in seen_paths:
+            continue
+        seen_paths.add(log.path)
+        unique.append(log)
+    return unique
+
+
+def status_class(status: str) -> str:
+    if status in VALID_STATUSES:
+        return status
+    return "pending"
+
+
+def render_html_template(template_source: str, context: dict[str, Any]) -> str:
+    try:
+        from jinja2 import Environment, select_autoescape
+    except ImportError as error:
+        raise ConfigError(
+            "render requires jinja2; install project dependencies with `uv sync`"
+        ) from error
+
+    environment = Environment(
+        autoescape=select_autoescape(
+            enabled_extensions=("html", "xml"),
+            default_for_string=True,
+        )
+    )
+    return environment.from_string(template_source).render(**context)
+
+
+def main_report_template() -> str:
+    return """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ project_name }} bucle report</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f7fa;
+      --panel: #ffffff;
+      --text: #151a23;
+      --muted: #667085;
+      --border: #d9dee8;
+      --accent: #1955d6;
+      --success: #18794e;
+      --failure: #ba1a1a;
+      --uncompleted: #9a6700;
+      --pending: #475467;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }
+    header {
+      background: #111827;
+      color: white;
+      padding: 28px clamp(18px, 5vw, 56px);
+    }
+    header h1 {
+      margin: 0 0 6px;
+      font-size: clamp(1.8rem, 3vw, 2.8rem);
+      font-weight: 760;
+    }
+    header p {
+      margin: 0;
+      color: #cbd5e1;
+      overflow-wrap: anywhere;
+    }
+    main {
+      width: min(1120px, calc(100% - 32px));
+      margin: 24px auto 48px;
+    }
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+    .summary-item, .task-card, .unmatched {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
+    }
+    .summary-item {
+      padding: 14px 16px;
+    }
+    .summary-item strong {
+      display: block;
+      font-size: 1.35rem;
+    }
+    .summary-item span {
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+    .task-list {
+      display: grid;
+      gap: 14px;
+    }
+    .task-card {
+      padding: 18px;
+    }
+    .task-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      align-items: flex-start;
+      margin-bottom: 12px;
+    }
+    .task-title {
+      min-width: 0;
+    }
+    .task-title h2 {
+      margin: 0 0 4px;
+      font-size: 1.2rem;
+      overflow-wrap: anywhere;
+    }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+    .badge {
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 4px 10px;
+      font-size: 0.82rem;
+      font-weight: 700;
+      white-space: nowrap;
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
+    }
+    .status-success { color: var(--success); border-color: #b7e4ce; background: #edfdf4; }
+    .status-failure { color: var(--failure); border-color: #f3b8b8; background: #fff1f1; }
+    .status-uncompleted { color: var(--uncompleted); border-color: #f7d98d; background: #fff8e5; }
+    .status-pending { color: var(--pending); border-color: #d0d5dd; background: #f8fafc; }
+    .prompt {
+      margin: 12px 0 14px;
+      padding: 14px;
+      border-radius: 8px;
+      background: #f8fafc;
+      border: 1px solid #e6e9ef;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 0.9rem;
+    }
+    .failure {
+      margin: 0 0 14px;
+      color: var(--failure);
+      font-weight: 650;
+    }
+    details {
+      border-top: 1px solid var(--border);
+      padding-top: 12px;
+    }
+    summary {
+      cursor: pointer;
+      font-weight: 720;
+      color: #202939;
+    }
+    .log-list {
+      list-style: none;
+      padding: 0;
+      margin: 10px 0 0;
+      display: grid;
+      gap: 8px;
+    }
+    .log-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 0;
+      border-top: 1px solid #edf0f5;
+    }
+    .log-meta {
+      min-width: 0;
+    }
+    .log-meta strong {
+      display: block;
+      overflow-wrap: anywhere;
+    }
+    .log-meta span {
+      color: var(--muted);
+      font-size: 0.86rem;
+    }
+    .actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    button, .button {
+      appearance: none;
+      border: 1px solid #b8c2d6;
+      background: white;
+      color: #172033;
+      border-radius: 7px;
+      padding: 7px 10px;
+      font: inherit;
+      font-size: 0.9rem;
+      line-height: 1;
+      text-decoration: none;
+      cursor: pointer;
+    }
+    button:hover, .button:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .muted {
+      color: var(--muted);
+      margin: 10px 0 0;
+    }
+    .unmatched {
+      margin-top: 22px;
+      padding: 18px;
+    }
+    .unmatched h2 {
+      margin: 0 0 10px;
+      font-size: 1.1rem;
+    }
+    @media (max-width: 680px) {
+      .task-header, .log-row {
+        display: grid;
+      }
+      .actions {
+        justify-content: flex-start;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>{{ project_name }}</h1>
+    <p>{{ config_path }} | generated {{ generated_at }}</p>
+  </header>
+  <main>
+    <section class="summary" aria-label="Report summary">
+      <div class="summary-item"><strong>{{ task_count }}</strong><span>tasks</span></div>
+      <div class="summary-item"><strong>{{ log_count }}</strong><span>log files</span></div>
+    </section>
+    <section class="task-list" aria-label="Tasks">
+      {% for task in tasks %}
+      <article class="task-card">
+        <div class="task-header">
+          <div class="task-title">
+            <h2>{{ task.index }}. {{ task.name }}</h2>
+            <div class="meta">
+              <span>Agent: {{ task.agent }}</span>
+              {% if task.auto_reset %}<span>Auto-reset</span>{% endif %}
+            </div>
+          </div>
+          <span class="badge status-{{ task.status_class }}">{{ task.status }}</span>
+        </div>
+        <div class="prompt">{{ task.prompt }}</div>
+        {% if task.failure_reason %}
+        <p class="failure">Failure reason: {{ task.failure_reason }}</p>
+        {% endif %}
+        <details>
+          <summary>{{ task.logs|length }} log file{% if task.logs|length != 1 %}s{% endif %}</summary>
+          {% if task.logs %}
+          <ul class="log-list">
+            {% for log in task.logs %}
+            <li class="log-row">
+              <div class="log-meta">
+                <strong>{{ log.filename }}</strong>
+                <span>{{ log.display_date }} | {{ log.agent }}</span>
+              </div>
+              <div class="actions">
+                <button type="button" data-copy-path="{{ log.absolute_path }}">Copy path</button>
+                <a class="button" href="{{ log.html_filename }}">Visualize</a>
+              </div>
+            </li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="muted">No log files found for this task.</p>
+          {% endif %}
+        </details>
+      </article>
+      {% endfor %}
+    </section>
+    {% if unmatched_logs %}
+    <section class="unmatched">
+      <h2>Unmatched log files</h2>
+      <ul class="log-list">
+        {% for log in unmatched_logs %}
+        <li class="log-row">
+          <div class="log-meta">
+            <strong>{{ log.filename }}</strong>
+            <span>{{ log.display_date }} | {{ log.task_name }} | {{ log.agent }}</span>
+          </div>
+          <div class="actions">
+            <button type="button" data-copy-path="{{ log.absolute_path }}">Copy path</button>
+            <a class="button" href="{{ log.html_filename }}">Visualize</a>
+          </div>
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
+  </main>
+  <script>
+    async function copyText(text) {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        return;
+      }
+      const textArea = document.createElement("textarea");
+      textArea.value = text;
+      textArea.style.position = "fixed";
+      textArea.style.left = "-9999px";
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      document.execCommand("copy");
+      textArea.remove();
+    }
+
+    document.querySelectorAll("[data-copy-path]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const original = button.textContent;
+        try {
+          await copyText(button.dataset.copyPath);
+          button.textContent = "Copied";
+        } catch {
+          button.textContent = "Copy failed";
+        }
+        window.setTimeout(() => {
+          button.textContent = original;
+        }, 1400);
+      });
+    });
+  </script>
+</body>
+</html>
+"""
+
+
+def log_template() -> str:
+    return """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ log.filename }}</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #101318;
+      --panel: #181d25;
+      --text: #ecf0f5;
+      --muted: #aab4c0;
+      --border: #2c3441;
+      --accent: #8db4ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      line-height: 1.5;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+      padding: 20px clamp(16px, 4vw, 36px);
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    h1 {
+      margin: 0 0 4px;
+      font-size: 1.25rem;
+      overflow-wrap: anywhere;
+    }
+    p {
+      margin: 0;
+      color: var(--muted);
+      overflow-wrap: anywhere;
+    }
+    a {
+      color: var(--accent);
+      text-decoration: none;
+      white-space: nowrap;
+    }
+    pre {
+      margin: 0;
+      padding: 24px clamp(16px, 4vw, 36px) 40px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      tab-size: 2;
+    }
+    @media (max-width: 680px) {
+      header {
+        display: grid;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>{{ log.task_name }}</h1>
+      <p>{{ log.display_date }} | {{ log.agent }} | {{ log.filename }}</p>
+    </div>
+    <a href="{{ index_href }}">Index</a>
+  </header>
+  <pre>{{ log.contents }}</pre>
+</body>
+</html>
+"""
 
 
 def format_task_status(task: Any) -> tuple[str, str]:

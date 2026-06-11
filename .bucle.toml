@@ -17,6 +17,26 @@ cmd = "opencode run --model openai/gpt-5.5 {{prompt}}"
 
 ## we need to include some sort of git integration but we are not sure how to do it, we could do it in the agent itself, but maybe it's better to do it in the tool. For instance, after every task, we could commit the changes with a random message. We could even generate the commit message with the external LLM handled by bucle itself, for instance, we could have a API call like "generate commit message" that would take as input the name of the task and the status (success or failure) and then it would generate a commit message that we could use for the commit.
 
+
+[[tasks]]
+name = "bucle-factorize-helpers"
+agent = "opencode"
+prompt = """
+I see that the cli script is really long and it has become hard to maintain.
+
+Can we start factorizing things?
+
+First i would like to have a module for helper functions.
+
+Examples:
+- format_utc_timestamp
+- safe_filename
+- is_mapping
+
+Also check for more helper functions and include them in this file.
+"""
+status = "success"
+
 [[tasks]]
 name = "bucle-init-command-justfile"
 agent = "opencode"
@@ -34,6 +54,19 @@ bucle-list:
     bucle list
 
 """
+status = "success"
+
+[[tasks]]
+name = "bucle-factorize-templates"
+agent = "opencode"
+prompt = """
+I see that now the HTML templates for the render command are embedded in the cli script. Can we move them somewhere else?
+src/bucle/cli.py:639-1033
+
+- I want them to be downloaded together with the installation (see README.md:7-26).
+- I want them to be their own files, with extension .html.jinja2
+"""
+status = "success"
 
 [[tasks]]
 name = "bucle-render-commad"

@@ -161,6 +161,37 @@ class InitProjectTest(unittest.TestCase):
 
             self.assertEqual((root / ".gitignore").read_text(), ".bucle/\n")
 
+    def test_init_appends_bucle_recipes_to_existing_justfile(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / ".gitignore").write_text("")
+            justfile_path = root / "Justfile"
+            justfile_path.write_text("test:\n    pytest\n")
+
+            init_project(root)
+
+            self.assertEqual(
+                justfile_path.read_text(),
+                "test:\n"
+                "    pytest\n"
+                "# runs bucle tasks\n"
+                "bucle:\n"
+                "    bucle run --reverse -v\n"
+                "\n"
+                "# lists bucle tasks\n"
+                "bucle-list:\n"
+                "    bucle list\n",
+            )
+
+    def test_init_does_nothing_when_justfile_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / ".gitignore").write_text("")
+
+            init_project(root)
+
+            self.assertFalse((root / "Justfile").exists())
+
     def test_init_cli_reports_success(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

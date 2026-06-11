@@ -9,10 +9,25 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from rich.console import Console
-from rich.table import Table
 import tomlkit
 import typer
+from rich.console import Console
+from rich.table import Table
+
+from bucle.helpers import (
+    ConfigError,
+    cleanup_marker,
+    display_log_timestamp,
+    format_task_status,
+    format_utc_timestamp,
+    is_mapping,
+    load_template,
+    read_marker_entries,
+    render_html_template,
+    require_string,
+    require_table,
+    safe_filename,
+)
 
 VALID_STATUSES = {"success", "failure", "uncompleted"}
 PROMPT_PLACEHOLDER = "{{prompt}}"
@@ -43,12 +58,16 @@ agent = "codex"
 prompt = "Add or update a focused test for the previous change."
 auto-reset = true
 """
+BUCLE_JUSTFILE_RECIPES = """# runs bucle tasks
+bucle:
+    bucle run --reverse -v
+
+# lists bucle tasks
+bucle-list:
+    bucle list
+"""
 
 app = typer.Typer(help="Run agent tasks from a .bucle.toml file.")
-
-
-class ConfigError(Exception):
-    """Raised when a .bucle.toml file is invalid."""
 
 
 @dataclass(frozen=True)
@@ -288,6 +307,7 @@ def init_project(root: Path) -> None:
     bucle_dir = root / BUCLE_DIR
     bucle_dir.mkdir(exist_ok=True)
     append_gitignore_entry(gitignore_path, f"{BUCLE_DIR}/")
+    append_justfile_recipes(root / "Justfile")
     config_path.write_text(DEFAULT_INIT_CONFIG)
 
 
@@ -299,6 +319,17 @@ def append_gitignore_entry(path: Path, entry: str) -> None:
 
     separator = "" if not text or text.endswith("\n") else "\n"
     path.write_text(f"{text}{separator}{entry}\n")
+
+
+def append_justfile_recipes(path: Path) -> None:
+    if not path.exists():
+        return
+    if not path.is_file():
+        raise ConfigError("Justfile is not a file")
+
+    text = path.read_text()
+    separator = "" if not text or text.endswith("\n") else "\n"
+    path.write_text(f"{text}{separator}{BUCLE_JUSTFILE_RECIPES}")
 
 
 def validate_config(config: BucleConfig) -> None:
@@ -560,14 +591,6 @@ def parse_log_filename(path: Path) -> dict[str, str]:
     }
 
 
-def display_log_timestamp(timestamp: str) -> str:
-    raw_timestamp = timestamp.removesuffix("Z")
-    date, separator, time = raw_timestamp.partition("T")
-    if not separator:
-        return timestamp
-    return f"{date} {time.replace('-', ':')} UTC"
-
-
 def build_render_tasks(
     config: BucleConfig, logs: list[BucleLog]
 ) -> tuple[list[dict[str, Any]], list[BucleLog]]:
@@ -620,430 +643,12 @@ def status_class(status: str) -> str:
     return "pending"
 
 
-def render_html_template(template_source: str, context: dict[str, Any]) -> str:
-    try:
-        from jinja2 import Environment, select_autoescape
-    except ImportError as error:
-        raise ConfigError(
-            "render requires jinja2; install project dependencies with `uv sync`"
-        ) from error
-
-    environment = Environment(
-        autoescape=select_autoescape(
-            enabled_extensions=("html", "xml"),
-            default_for_string=True,
-        )
-    )
-    return environment.from_string(template_source).render(**context)
-
-
 def main_report_template() -> str:
-    return """<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ project_name }} bucle report</title>
-  <style>
-    :root {
-      color-scheme: light;
-      --bg: #f5f7fa;
-      --panel: #ffffff;
-      --text: #151a23;
-      --muted: #667085;
-      --border: #d9dee8;
-      --accent: #1955d6;
-      --success: #18794e;
-      --failure: #ba1a1a;
-      --uncompleted: #9a6700;
-      --pending: #475467;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      background: var(--bg);
-      color: var(--text);
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      line-height: 1.5;
-    }
-    header {
-      background: #111827;
-      color: white;
-      padding: 28px clamp(18px, 5vw, 56px);
-    }
-    header h1 {
-      margin: 0 0 6px;
-      font-size: clamp(1.8rem, 3vw, 2.8rem);
-      font-weight: 760;
-    }
-    header p {
-      margin: 0;
-      color: #cbd5e1;
-      overflow-wrap: anywhere;
-    }
-    main {
-      width: min(1120px, calc(100% - 32px));
-      margin: 24px auto 48px;
-    }
-    .summary {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-      gap: 12px;
-      margin-bottom: 18px;
-    }
-    .summary-item, .task-card, .unmatched {
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
-    }
-    .summary-item {
-      padding: 14px 16px;
-    }
-    .summary-item strong {
-      display: block;
-      font-size: 1.35rem;
-    }
-    .summary-item span {
-      color: var(--muted);
-      font-size: 0.88rem;
-    }
-    .task-list {
-      display: grid;
-      gap: 14px;
-    }
-    .task-card {
-      padding: 18px;
-    }
-    .task-header {
-      display: flex;
-      justify-content: space-between;
-      gap: 14px;
-      align-items: flex-start;
-      margin-bottom: 12px;
-    }
-    .task-title {
-      min-width: 0;
-    }
-    .task-title h2 {
-      margin: 0 0 4px;
-      font-size: 1.2rem;
-      overflow-wrap: anywhere;
-    }
-    .meta {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      color: var(--muted);
-      font-size: 0.9rem;
-    }
-    .badge {
-      border: 1px solid var(--border);
-      border-radius: 999px;
-      padding: 4px 10px;
-      font-size: 0.82rem;
-      font-weight: 700;
-      white-space: nowrap;
-      text-transform: uppercase;
-      letter-spacing: 0.02em;
-    }
-    .status-success { color: var(--success); border-color: #b7e4ce; background: #edfdf4; }
-    .status-failure { color: var(--failure); border-color: #f3b8b8; background: #fff1f1; }
-    .status-uncompleted { color: var(--uncompleted); border-color: #f7d98d; background: #fff8e5; }
-    .status-pending { color: var(--pending); border-color: #d0d5dd; background: #f8fafc; }
-    .prompt {
-      margin: 12px 0 14px;
-      padding: 14px;
-      border-radius: 8px;
-      background: #f8fafc;
-      border: 1px solid #e6e9ef;
-      white-space: pre-wrap;
-      overflow-wrap: anywhere;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-      font-size: 0.9rem;
-    }
-    .failure {
-      margin: 0 0 14px;
-      color: var(--failure);
-      font-weight: 650;
-    }
-    details {
-      border-top: 1px solid var(--border);
-      padding-top: 12px;
-    }
-    summary {
-      cursor: pointer;
-      font-weight: 720;
-      color: #202939;
-    }
-    .log-list {
-      list-style: none;
-      padding: 0;
-      margin: 10px 0 0;
-      display: grid;
-      gap: 8px;
-    }
-    .log-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      padding: 10px 0;
-      border-top: 1px solid #edf0f5;
-    }
-    .log-meta {
-      min-width: 0;
-    }
-    .log-meta strong {
-      display: block;
-      overflow-wrap: anywhere;
-    }
-    .log-meta span {
-      color: var(--muted);
-      font-size: 0.86rem;
-    }
-    .actions {
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-      justify-content: flex-end;
-    }
-    button, .button {
-      appearance: none;
-      border: 1px solid #b8c2d6;
-      background: white;
-      color: #172033;
-      border-radius: 7px;
-      padding: 7px 10px;
-      font: inherit;
-      font-size: 0.9rem;
-      line-height: 1;
-      text-decoration: none;
-      cursor: pointer;
-    }
-    button:hover, .button:hover {
-      border-color: var(--accent);
-      color: var(--accent);
-    }
-    .muted {
-      color: var(--muted);
-      margin: 10px 0 0;
-    }
-    .unmatched {
-      margin-top: 22px;
-      padding: 18px;
-    }
-    .unmatched h2 {
-      margin: 0 0 10px;
-      font-size: 1.1rem;
-    }
-    @media (max-width: 680px) {
-      .task-header, .log-row {
-        display: grid;
-      }
-      .actions {
-        justify-content: flex-start;
-      }
-    }
-  </style>
-</head>
-<body>
-  <header>
-    <h1>{{ project_name }}</h1>
-    <p>{{ config_path }} | generated {{ generated_at }}</p>
-  </header>
-  <main>
-    <section class="summary" aria-label="Report summary">
-      <div class="summary-item"><strong>{{ task_count }}</strong><span>tasks</span></div>
-      <div class="summary-item"><strong>{{ log_count }}</strong><span>log files</span></div>
-    </section>
-    <section class="task-list" aria-label="Tasks">
-      {% for task in tasks %}
-      <article class="task-card">
-        <div class="task-header">
-          <div class="task-title">
-            <h2>{{ task.index }}. {{ task.name }}</h2>
-            <div class="meta">
-              <span>Agent: {{ task.agent }}</span>
-              {% if task.auto_reset %}<span>Auto-reset</span>{% endif %}
-            </div>
-          </div>
-          <span class="badge status-{{ task.status_class }}">{{ task.status }}</span>
-        </div>
-        <div class="prompt">{{ task.prompt }}</div>
-        {% if task.failure_reason %}
-        <p class="failure">Failure reason: {{ task.failure_reason }}</p>
-        {% endif %}
-        <details>
-          <summary>{{ task.logs|length }} log file{% if task.logs|length != 1 %}s{% endif %}</summary>
-          {% if task.logs %}
-          <ul class="log-list">
-            {% for log in task.logs %}
-            <li class="log-row">
-              <div class="log-meta">
-                <strong>{{ log.filename }}</strong>
-                <span>{{ log.display_date }} | {{ log.agent }}</span>
-              </div>
-              <div class="actions">
-                <button type="button" data-copy-path="{{ log.absolute_path }}">Copy path</button>
-                <a class="button" href="{{ log.html_filename }}">Visualize</a>
-              </div>
-            </li>
-            {% endfor %}
-          </ul>
-          {% else %}
-          <p class="muted">No log files found for this task.</p>
-          {% endif %}
-        </details>
-      </article>
-      {% endfor %}
-    </section>
-    {% if unmatched_logs %}
-    <section class="unmatched">
-      <h2>Unmatched log files</h2>
-      <ul class="log-list">
-        {% for log in unmatched_logs %}
-        <li class="log-row">
-          <div class="log-meta">
-            <strong>{{ log.filename }}</strong>
-            <span>{{ log.display_date }} | {{ log.task_name }} | {{ log.agent }}</span>
-          </div>
-          <div class="actions">
-            <button type="button" data-copy-path="{{ log.absolute_path }}">Copy path</button>
-            <a class="button" href="{{ log.html_filename }}">Visualize</a>
-          </div>
-        </li>
-        {% endfor %}
-      </ul>
-    </section>
-    {% endif %}
-  </main>
-  <script>
-    async function copyText(text) {
-      if (navigator.clipboard && window.isSecureContext) {
-        await navigator.clipboard.writeText(text);
-        return;
-      }
-      const textArea = document.createElement("textarea");
-      textArea.value = text;
-      textArea.style.position = "fixed";
-      textArea.style.left = "-9999px";
-      document.body.appendChild(textArea);
-      textArea.focus();
-      textArea.select();
-      document.execCommand("copy");
-      textArea.remove();
-    }
-
-    document.querySelectorAll("[data-copy-path]").forEach((button) => {
-      button.addEventListener("click", async () => {
-        const original = button.textContent;
-        try {
-          await copyText(button.dataset.copyPath);
-          button.textContent = "Copied";
-        } catch {
-          button.textContent = "Copy failed";
-        }
-        window.setTimeout(() => {
-          button.textContent = original;
-        }, 1400);
-      });
-    });
-  </script>
-</body>
-</html>
-"""
+    return load_template("main_report.html.jinja2")
 
 
 def log_template() -> str:
-    return """<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ log.filename }}</title>
-  <style>
-    :root {
-      color-scheme: dark;
-      --bg: #101318;
-      --panel: #181d25;
-      --text: #ecf0f5;
-      --muted: #aab4c0;
-      --border: #2c3441;
-      --accent: #8db4ff;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      background: var(--bg);
-      color: var(--text);
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-      line-height: 1.5;
-    }
-    header {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      gap: 16px;
-      padding: 20px clamp(16px, 4vw, 36px);
-      background: var(--panel);
-      border-bottom: 1px solid var(--border);
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    }
-    h1 {
-      margin: 0 0 4px;
-      font-size: 1.25rem;
-      overflow-wrap: anywhere;
-    }
-    p {
-      margin: 0;
-      color: var(--muted);
-      overflow-wrap: anywhere;
-    }
-    a {
-      color: var(--accent);
-      text-decoration: none;
-      white-space: nowrap;
-    }
-    pre {
-      margin: 0;
-      padding: 24px clamp(16px, 4vw, 36px) 40px;
-      white-space: pre-wrap;
-      word-break: break-word;
-      tab-size: 2;
-    }
-    @media (max-width: 680px) {
-      header {
-        display: grid;
-      }
-    }
-  </style>
-</head>
-<body>
-  <header>
-    <div>
-      <h1>{{ log.task_name }}</h1>
-      <p>{{ log.display_date }} | {{ log.agent }} | {{ log.filename }}</p>
-    </div>
-    <a href="{{ index_href }}">Index</a>
-  </header>
-  <pre>{{ log.contents }}</pre>
-</body>
-</html>
-"""
-
-
-def format_task_status(task: Any) -> tuple[str, str]:
-    status = task.get("status")
-    if status == "success":
-        return "✅ done", "green"
-    if status == "failure":
-        reason = task.get("failure_reason")
-        detail = f": {reason}" if reason else ""
-        return f"❌ not done{detail}", "red"
-    if status == "uncompleted":
-        return "⚠️ not done", "yellow"
-    return "⏳ not done", "yellow"
+    return load_template("log.html.jinja2")
 
 
 def get_pending_tasks(config: BucleConfig) -> list[RunTask]:
@@ -1093,9 +698,9 @@ def completion_contract(config: BucleConfig, task: RunTask) -> str:
         "Bucle completion contract:\n"
         f"- Do not edit {config.path.name}.\n"
         f"- When task '{task.name}' succeeds, run: "
-        f"echo \"{task.name}\" >> {BUCLE_DIR}/{SUCCESS_MARKER}.\n"
+        f'echo "{task.name}" >> {BUCLE_DIR}/{SUCCESS_MARKER}.\n'
         f"- When task '{task.name}' fails, run: "
-        f"echo \"{task.name},<reason>\" >> {BUCLE_DIR}/{FAILURE_MARKER}.\n"
+        f'echo "{task.name},<reason>" >> {BUCLE_DIR}/{FAILURE_MARKER}.\n'
         "- Update exactly one marker file for this task.\n"
         "- Valid final TOML statuses are: success, failure, uncompleted."
     )
@@ -1146,63 +751,7 @@ def run_task_command(
 def task_log_path(config: BucleConfig, task: RunTask, started_at: datetime) -> Path:
     timestamp = format_utc_timestamp(started_at)
     safe_timestamp = timestamp.replace(":", "-")
-    log_name = f"{safe_timestamp}_{safe_filename(task.name)}.{safe_filename(task.agent)}.log"
+    log_name = (
+        f"{safe_timestamp}_{safe_filename(task.name)}.{safe_filename(task.agent)}.log"
+    )
     return config.output_dir / log_name
-
-
-def format_utc_timestamp(value: datetime) -> str:
-    return value.isoformat(timespec="seconds").replace("+00:00", "Z")
-
-
-def read_marker_entries(path: Path, marker_name: str) -> list[dict[str, Any]]:
-    entries: list[dict[str, Any]] = []
-    for index, raw_line in enumerate(path.read_text().splitlines()):
-        line = raw_line.strip()
-        if not line:
-            continue
-        if marker_name == "failure":
-            name, separator, reason = line.partition(",")
-            if not name:
-                raise ConfigError(f"{path}:{index + 1} must start with a task name")
-            entry = {"name": name}
-            if separator and reason:
-                entry["reason"] = reason
-        else:
-            entry = {"name": line}
-        entries.append(entry)
-    return entries
-
-
-def cleanup_marker(path: Path) -> None:
-    try:
-        path.unlink()
-    except FileNotFoundError:
-        pass
-
-
-def require_table(mapping: Any, key: str) -> Any:
-    value = mapping.get(key)
-    if not is_mapping(value):
-        raise ConfigError(f"{key} must be a table")
-    return value
-
-
-def require_string(mapping: Any, key: str, label: str) -> str:
-    value = mapping.get(key)
-    if not isinstance(value, str) or not value:
-        raise ConfigError(f"{label} must be a non-empty string")
-    return value
-
-
-def is_mapping(value: Any) -> bool:
-    return hasattr(value, "items") and hasattr(value, "get")
-
-
-def safe_filename(value: str) -> str:
-    safe_chars = []
-    for char in value:
-        if char.isalnum() or char in ("-", "_", "."):
-            safe_chars.append(char)
-        else:
-            safe_chars.append("_")
-    return "".join(safe_chars).strip("._") or "task"

@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ project_name }} bucle report</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f7fa;
+      --panel: #ffffff;
+      --text: #151a23;
+      --muted: #667085;
+      --border: #d9dee8;
+      --accent: #1955d6;
+      --success: #18794e;
+      --failure: #ba1a1a;
+      --uncompleted: #9a6700;
+      --pending: #475467;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }
+    header {
+      background: #111827;
+      color: white;
+      padding: 28px clamp(18px, 5vw, 56px);
+    }
+    header h1 {
+      margin: 0 0 6px;
+      font-size: clamp(1.8rem, 3vw, 2.8rem);
+      font-weight: 760;
+    }
+    header p {
+      margin: 0;
+      color: #cbd5e1;
+      overflow-wrap: anywhere;
+    }
+    main {
+      width: min(1120px, calc(100% - 32px));
+      margin: 24px auto 48px;
+    }
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+    .summary-item, .task-card, .unmatched {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
+    }
+    .summary-item {
+      padding: 14px 16px;
+    }
+    .summary-item strong {
+      display: block;
+      font-size: 1.35rem;
+    }
+    .summary-item span {
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+    .task-list {
+      display: grid;
+      gap: 14px;
+    }
+    .task-card {
+      padding: 18px;
+    }
+    .task-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      align-items: flex-start;
+      margin-bottom: 12px;
+    }
+    .task-title {
+      min-width: 0;
+    }
+    .task-title h2 {
+      margin: 0 0 4px;
+      font-size: 1.2rem;
+      overflow-wrap: anywhere;
+    }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+    .badge {
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 4px 10px;
+      font-size: 0.82rem;
+      font-weight: 700;
+      white-space: nowrap;
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
+    }
+    .status-success { color: var(--success); border-color: #b7e4ce; background: #edfdf4; }
+    .status-failure { color: var(--failure); border-color: #f3b8b8; background: #fff1f1; }
+    .status-uncompleted { color: var(--uncompleted); border-color: #f7d98d; background: #fff8e5; }
+    .status-pending { color: var(--pending); border-color: #d0d5dd; background: #f8fafc; }
+    .prompt {
+      margin: 12px 0 14px;
+      padding: 14px;
+      border-radius: 8px;
+      background: #f8fafc;
+      border: 1px solid #e6e9ef;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 0.9rem;
+    }
+    .failure {
+      margin: 0 0 14px;
+      color: var(--failure);
+      font-weight: 650;
+    }
+    details {
+      border-top: 1px solid var(--border);
+      padding-top: 12px;
+    }
+    summary {
+      cursor: pointer;
+      font-weight: 720;
+      color: #202939;
+    }
+    .log-list {
+      list-style: none;
+      padding: 0;
+      margin: 10px 0 0;
+      display: grid;
+      gap: 8px;
+    }
+    .log-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 0;
+      border-top: 1px solid #edf0f5;
+    }
+    .log-meta {
+      min-width: 0;
+    }
+    .log-meta strong {
+      display: block;
+      overflow-wrap: anywhere;
+    }
+    .log-meta span {
+      color: var(--muted);
+      font-size: 0.86rem;
+    }
+    .actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    button, .button {
+      appearance: none;
+      border: 1px solid #b8c2d6;
+      background: white;
+      color: #172033;
+      border-radius: 7px;
+      padding: 7px 10px;
+      font: inherit;
+      font-size: 0.9rem;
+      line-height: 1;
+      text-decoration: none;
+      cursor: pointer;
+    }
+    button:hover, .button:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .muted {
+      color: var(--muted);
+      margin: 10px 0 0;
+    }
+    .unmatched {
+      margin-top: 22px;
+      padding: 18px;
+    }
+    .unmatched h2 {
+      margin: 0 0 10px;
+      font-size: 1.1rem;
+    }
+    @media (max-width: 680px) {
+      .task-header, .log-row {
+        display: grid;
+      }
+      .actions {
+        justify-content: flex-start;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>{{ project_name }}</h1>
+    <p>{{ config_path }} | generated {{ generated_at }}</p>
+  </header>
+  <main>
+    <section class="summary" aria-label="Report summary">
+      <div class="summary-item"><strong>{{ task_count }}</strong><span>tasks</span></div>
+      <div class="summary-item"><strong>{{ log_count }}</strong><span>log files</span></div>
+    </section>
+    <section class="task-list" aria-label="Tasks">
+      {% for task in tasks %}
+      <article class="task-card">
+        <div class="task-header">
+          <div class="task-title">
+            <h2>{{ task.index }}. {{ task.name }}</h2>
+            <div class="meta">
+              <span>Agent: {{ task.agent }}</span>
+              {% if task.auto_reset %}<span>Auto-reset</span>{% endif %}
+            </div>
+          </div>
+          <span class="badge status-{{ task.status_class }}">{{ task.status }}</span>
+        </div>
+        <div class="prompt">{{ task.prompt }}</div>
+        {% if task.failure_reason %}
+        <p class="failure">Failure reason: {{ task.failure_reason }}</p>
+        {% endif %}
+        <details>
+          <summary>{{ task.logs|length }} log file{% if task.logs|length != 1 %}s{% endif %}</summary>
+          {% if task.logs %}
+          <ul class="log-list">
+            {% for log in task.logs %}
+            <li class="log-row">
+              <div class="log-meta">
+                <strong>{{ log.filename }}</strong>
+                <span>{{ log.display_date }} | {{ log.agent }}</span>
+              </div>
+              <div class="actions">
+                <button type="button" data-copy-path="{{ log.absolute_path }}">Copy path</button>
+                <a class="button" href="{{ log.html_filename }}">Visualize</a>
+              </div>
+            </li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="muted">No log files found for this task.</p>
+          {% endif %}
+        </details>
+      </article>
+      {% endfor %}
+    </section>
+    {% if unmatched_logs %}
+    <section class="unmatched">
+      <h2>Unmatched log files</h2>
+      <ul class="log-list">
+        {% for log in unmatched_logs %}
+        <li class="log-row">
+          <div class="log-meta">
+            <strong>{{ log.filename }}</strong>
+            <span>{{ log.display_date }} | {{ log.task_name }} | {{ log.agent }}</span>
+          </div>
+          <div class="actions">
+            <button type="button" data-copy-path="{{ log.absolute_path }}">Copy path</button>
+            <a class="button" href="{{ log.html_filename }}">Visualize</a>
+          </div>
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
+  </main>
+  <script>
+    async function copyText(text) {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        return;
+      }
+      const textArea = document.createElement("textarea");
+      textArea.value = text;
+      textArea.style.position = "fixed";
+      textArea.style.left = "-9999px";
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      document.execCommand("copy");
+      textArea.remove();
+    }
+
+    document.querySelectorAll("[data-copy-path]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const original = button.textContent;
+        try {
+          await copyText(button.dataset.copyPath);
+          button.textContent = "Copied";
+        } catch {
+          button.textContent = "Copy failed";
+        }
+        window.setTimeout(() => {
+          button.textContent = original;
+        }, 1400);
+      });
+    });
+  </script>
+</body>
+</html>

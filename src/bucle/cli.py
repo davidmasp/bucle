@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import curses
 import random
 import re
 import shlex
@@ -112,6 +113,15 @@ class BucleLog:
     timestamp: str
     display_date: str
     contents: str
+
+
+@dataclass(frozen=True)
+class TaskListRow:
+    index: int
+    name: str
+    agent: str
+    status_text: str
+    status_style: str
 
 
 def main() -> None:
@@ -254,6 +264,32 @@ def tasks(
         raise typer.Exit(1) from error
 
     print_tasks(bucle_config, limit=limit)
+
+
+@app.command()
+def tui(
+    config: Path = typer.Option(
+        Path(".bucle.toml"),
+        "--config",
+        "-c",
+        help="Path to the .bucle.toml file.",
+    ),
+    limit: int | None = typer.Option(
+        None,
+        "--limit",
+        help="Maximum number of tasks to show.",
+    ),
+) -> None:
+    """Open an interactive task list TUI."""
+    try:
+        bucle_config = load_config(config)
+        launch_tui(bucle_config, limit=limit)
+    except ConfigError as error:
+        typer.echo(f"Invalid config: {error}", err=True)
+        raise typer.Exit(1) from error
+    except curses.error as error:
+        typer.echo(f"TUI failed: {error}", err=True)
+        raise typer.Exit(1) from error
 
 
 @app.command()
@@ -484,28 +520,110 @@ def reset_auto_tasks(config: BucleConfig) -> int:
 
 
 def print_tasks(config: BucleConfig, limit: int | None = None) -> None:
-    validate_limit(limit)
     table = Table(title=f"Tasks for {config.document['metadata']['name']}")
     table.add_column("#", justify="right", style="dim")
     table.add_column("Task", style="bold")
     table.add_column("Agent", style="cyan")
     table.add_column("Status")
 
-    tasks = config.document["tasks"]
-    if limit is not None:
-        tasks = tasks[:limit]
-    for index, task in enumerate(tasks, start=1):
-        status_text, status_style = format_task_status(task)
+    for row in build_task_rows(config, limit=limit):
         table.add_row(
-            str(index),
-            str(task["name"]),
-            str(task["agent"]),
-            status_text,
-            style=status_style,
+            str(row.index),
+            row.name,
+            row.agent,
+            row.status_text,
+            style=row.status_style,
         )
 
     console = Console()
     console.print(table)
+
+
+def build_task_rows(config: BucleConfig, limit: int | None = None) -> list[TaskListRow]:
+    validate_limit(limit)
+    tasks = config.document["tasks"]
+    if limit is not None:
+        tasks = tasks[:limit]
+
+    rows = []
+    for index, task in enumerate(tasks, start=1):
+        status_text, status_style = format_task_status(task)
+        rows.append(
+            TaskListRow(
+                index=index,
+                name=str(task["name"]),
+                agent=str(task["agent"]),
+                status_text=status_text,
+                status_style=status_style,
+            )
+        )
+    return rows
+
+
+def launch_tui(config: BucleConfig, limit: int | None = None) -> None:
+    curses.wrapper(run_tui, config.path, limit)
+
+
+def run_tui(screen: Any, config_path: Path, limit: int | None = None) -> None:
+    curses.curs_set(0)
+    screen.keypad(True)
+    selection = 0
+    message = "Use ↑/↓ or j/k to move, r to reset, q to quit."
+
+    while True:
+        config = load_config(config_path)
+        rows = build_task_rows(config, limit=limit)
+        if rows:
+            selection = max(0, min(selection, len(rows) - 1))
+        else:
+            selection = 0
+
+        draw_tui(screen, config, rows, selection, message)
+        key = screen.getch()
+
+        if key in (ord("q"), 27):
+            return
+        if key in (curses.KEY_UP, ord("k")) and selection > 0:
+            selection -= 1
+            continue
+        if key in (curses.KEY_DOWN, ord("j")) and selection < len(rows) - 1:
+            selection += 1
+            continue
+        if key == ord("r"):
+            if not rows:
+                message = "No task selected."
+                continue
+            reset_task(config, rows[selection].name)
+            message = f"Reset task: {rows[selection].name}"
+
+
+def draw_tui(
+    screen: Any,
+    config: BucleConfig,
+    rows: list[TaskListRow],
+    selection: int,
+    message: str,
+) -> None:
+    screen.erase()
+    height, width = screen.getmaxyx()
+    title = f"bucle tui - {config.document['metadata']['name']}"
+    screen.addnstr(0, 0, title, width - 1, curses.A_BOLD)
+    screen.addnstr(1, 0, "#  Task                       Agent        Status", width - 1)
+
+    available_rows = max(0, height - 4)
+    start = 0
+    if available_rows and selection >= available_rows:
+        start = selection - available_rows + 1
+
+    visible_rows = rows[start : start + available_rows] if available_rows else []
+    for offset, row in enumerate(visible_rows, start=2):
+        line = f"{row.index:>2}  {row.name:<26.26} {row.agent:<12.12} {row.status_text}"
+        attrs = curses.A_REVERSE if row.index - 1 == selection else curses.A_NORMAL
+        screen.addnstr(offset, 0, line, width - 1, attrs)
+
+    footer_row = max(2, height - 1)
+    screen.addnstr(footer_row, 0, message, width - 1)
+    screen.refresh()
 
 
 def render_site(config: BucleConfig) -> Path:

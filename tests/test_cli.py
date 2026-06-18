@@ -15,6 +15,7 @@ from typer.testing import CliRunner
 from bucle.cli import (
     ConfigError,
     app,
+    build_task_rows,
     collect_log_files,
     format_task_status,
     init_project,
@@ -511,6 +512,46 @@ class TaskListTest(unittest.TestCase):
         self.assertIn("task2", result.output)
         self.assertNotIn("task3", result.output)
 
+    def test_build_task_rows_matches_status_formatting(self) -> None:
+        config_text = (
+            VALID_CONFIG.format(cmd="echo {{prompt}}")
+            + '\nstatus = "failure"\nfailure_reason = "bad result"\n'
+        )
+        with temp_config(config_text) as config_path:
+            config = load_config(config_path)
+
+        rows = build_task_rows(config)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].status_text, "❌ not done: bad result")
+        self.assertEqual(rows[0].status_style, "red")
+
+
+class TuiCommandTest(unittest.TestCase):
+    def test_tui_command_launches_tui(self) -> None:
+        with temp_config(VALID_CONFIG.format(cmd="echo {{prompt}}")) as config_path:
+            with patch("bucle.cli.launch_tui") as launch:
+                result = runner.invoke(app, ["tui", "--config", str(config_path)])
+
+        self.assertEqual(result.exit_code, 0)
+        launch.assert_called_once()
+
+    def test_run_tui_reset_key_resets_selected_task(self) -> None:
+        config_text = (
+            VALID_CONFIG.format(cmd="echo {{prompt}}")
+            + '\nstatus = "failure"\nfailure_reason = "bad result"\n'
+        )
+        with temp_config(config_text) as config_path:
+            screen = FakeScreen([ord("r"), ord("q")])
+            with patch("bucle.cli.draw_tui"), patch("bucle.cli.curses.curs_set"):
+                from bucle.cli import run_tui
+
+                run_tui(screen, config_path)
+
+            document = tomlkit.parse(config_path.read_text())
+
+        self.assertNotIn("status", document["tasks"][0])
+        self.assertNotIn("failure_reason", document["tasks"][0])
+
 
 def config_for_fake_agent(mode: str) -> str:
     script = Path(__file__).parent / "support" / "fake_agent.py"
@@ -553,6 +594,30 @@ class temp_config:
     def __exit__(self, *args) -> None:
         assert self.temp_dir is not None
         self.temp_dir.cleanup()
+
+
+class FakeScreen:
+    def __init__(self, keys: list[int]) -> None:
+        self.keys = list(keys)
+        self.keypad_enabled = False
+
+    def keypad(self, enabled: bool) -> None:
+        self.keypad_enabled = enabled
+
+    def getch(self) -> int:
+        return self.keys.pop(0)
+
+    def erase(self) -> None:
+        return None
+
+    def getmaxyx(self) -> tuple[int, int]:
+        return (24, 80)
+
+    def addnstr(self, *_args) -> None:
+        return None
+
+    def refresh(self) -> None:
+        return None
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ import random
 import re
 import shlex
 import subprocess
+import textwrap
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -120,6 +121,7 @@ class TaskListRow:
     index: int
     name: str
     agent: str
+    prompt: str
     status_text: str
     status_style: str
 
@@ -553,6 +555,7 @@ def build_task_rows(config: BucleConfig, limit: int | None = None) -> list[TaskL
                 index=index,
                 name=str(task["name"]),
                 agent=str(task["agent"]),
+                prompt=str(task["prompt"]),
                 status_text=status_text,
                 status_style=status_style,
             )
@@ -568,7 +571,7 @@ def run_tui(screen: Any, config_path: Path, limit: int | None = None) -> None:
     curses.curs_set(0)
     screen.keypad(True)
     selection = 0
-    message = "Use ↑/↓ or j/k to move, r to reset, q to quit."
+    message = "Use ↑/↓ or j/k to move, p to inspect prompt, r to reset, q to quit."
 
     while True:
         config = load_config(config_path)
@@ -588,6 +591,12 @@ def run_tui(screen: Any, config_path: Path, limit: int | None = None) -> None:
             continue
         if key in (curses.KEY_DOWN, ord("j")) and selection < len(rows) - 1:
             selection += 1
+            continue
+        if key == ord("p"):
+            if not rows:
+                message = "No task selected."
+                continue
+            show_task_prompt(screen, rows[selection])
             continue
         if key == ord("r"):
             if not rows:
@@ -624,6 +633,123 @@ def draw_tui(
     footer_row = max(2, height - 1)
     screen.addnstr(footer_row, 0, message, width - 1)
     screen.refresh()
+
+
+def show_task_prompt(screen: Any, row: TaskListRow) -> None:
+    scroll = 0
+    while True:
+        max_scroll = draw_prompt_window(screen, row, scroll)
+        scroll = min(scroll, max_scroll)
+        key = screen.getch()
+
+        if key in (ord("q"), ord("p"), 27):
+            return
+        if key in (curses.KEY_UP, ord("k")) and scroll > 0:
+            scroll -= 1
+            continue
+        if key in (curses.KEY_DOWN, ord("j")) and scroll < max_scroll:
+            scroll += 1
+
+
+def draw_prompt_window(screen: Any, row: TaskListRow, scroll: int) -> int:
+    screen.erase()
+    height, width = screen.getmaxyx()
+    if height < 8 or width < 20:
+        screen.addnstr(
+            0,
+            0,
+            "Terminal too small for prompt view. Press q to close.",
+            max(0, width - 1),
+        )
+        screen.refresh()
+        return 0
+
+    panel_height = min(height - 2, max(8, height * 3 // 4))
+    panel_width = min(width - 4, max(40, width * 4 // 5))
+    panel_y = max(0, (height - panel_height) // 2)
+    panel_x = max(0, (width - panel_width) // 2)
+    inner_width = max(1, panel_width - 2)
+    content_width = max(1, panel_width - 4)
+    content_height = max(1, panel_height - 6)
+
+    prompt_lines = wrap_prompt_lines(row.prompt, content_width)
+    max_scroll = max(0, len(prompt_lines) - content_height)
+    scroll = max(0, min(scroll, max_scroll))
+    visible_lines = prompt_lines[scroll : scroll + content_height]
+
+    top_border = "+" + "-" * inner_width + "+"
+    separator = "+" + "-" * inner_width + "+"
+    available_width = max(0, width - panel_x - 1)
+    screen.addnstr(panel_y, panel_x, top_border, available_width)
+    screen.addnstr(
+        panel_y + 1,
+        panel_x,
+        panel_line(f" Prompt: {row.name}", inner_width),
+        available_width,
+    )
+    screen.addnstr(
+        panel_y + 2,
+        panel_x,
+        panel_line(f" Agent: {row.agent} | Status: {row.status_text}", inner_width),
+        available_width,
+    )
+    screen.addnstr(panel_y + 3, panel_x, separator, available_width)
+
+    for offset in range(content_height):
+        text = visible_lines[offset] if offset < len(visible_lines) else ""
+        screen.addnstr(
+            panel_y + 4 + offset,
+            panel_x,
+            panel_line(f" {text}", inner_width),
+            available_width,
+        )
+
+    shown_until = min(len(prompt_lines), scroll + content_height)
+    footer = f" {scroll + 1}-{shown_until}/{len(prompt_lines)}  j/k scroll  p/q close"
+    screen.addnstr(
+        panel_y + panel_height - 2,
+        panel_x,
+        panel_line(footer, inner_width),
+        available_width,
+    )
+    screen.addnstr(panel_y + panel_height - 1, panel_x, top_border, available_width)
+    screen.refresh()
+    return max_scroll
+
+
+def wrap_prompt_lines(prompt: str, width: int) -> list[str]:
+    lines: list[str] = []
+    for raw_line in prompt.splitlines() or [""]:
+        if not raw_line:
+            lines.append("")
+            continue
+        lines.extend(
+            textwrap.wrap(
+                raw_line,
+                width=max(1, width),
+                break_long_words=True,
+                break_on_hyphens=False,
+                replace_whitespace=False,
+                drop_whitespace=False,
+            )
+            or [""]
+        )
+    return lines
+
+
+def panel_line(text: str, width: int) -> str:
+    clipped = truncate_text(text, width)
+    return f"|{clipped.ljust(width)}|"
+
+
+def truncate_text(text: str, width: int) -> str:
+    if width <= 0:
+        return ""
+    if len(text) <= width:
+        return text
+    if width <= 3:
+        return text[:width]
+    return f"{text[: width - 3]}..."
 
 
 def render_site(config: BucleConfig) -> Path:

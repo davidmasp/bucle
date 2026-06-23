@@ -14,9 +14,11 @@ from typer.testing import CliRunner
 
 from bucle.cli import (
     ConfigError,
+    TaskListRow,
     app,
     build_task_rows,
     collect_log_files,
+    draw_prompt_window,
     format_task_status,
     init_project,
     load_config,
@@ -522,6 +524,7 @@ class TaskListTest(unittest.TestCase):
 
         rows = build_task_rows(config)
         self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].prompt, "Do task one")
         self.assertEqual(rows[0].status_text, "❌ not done: bad result")
         self.assertEqual(rows[0].status_style, "red")
 
@@ -551,6 +554,51 @@ class TuiCommandTest(unittest.TestCase):
 
         self.assertNotIn("status", document["tasks"][0])
         self.assertNotIn("failure_reason", document["tasks"][0])
+
+    def test_run_tui_prompt_key_shows_selected_task_prompt(self) -> None:
+        config_text = (
+            VALID_CONFIG.format(cmd="echo {{prompt}}")
+            + """
+
+            [[tasks]]
+            name = "task2"
+            agent = "fake"
+            prompt = "Do task two"
+            """
+        )
+        with temp_config(config_text) as config_path:
+            screen = FakeScreen([ord("j"), ord("p"), ord("q")])
+            with (
+                patch("bucle.cli.draw_tui"),
+                patch("bucle.cli.show_task_prompt") as show_task_prompt,
+                patch("bucle.cli.curses.curs_set"),
+            ):
+                from bucle.cli import run_tui
+
+                run_tui(screen, config_path)
+
+        shown_row = show_task_prompt.call_args.args[1]
+        self.assertEqual(shown_row.name, "task2")
+        self.assertEqual(shown_row.prompt, "Do task two")
+
+    def test_draw_prompt_window_renders_prompt_panel(self) -> None:
+        row = TaskListRow(
+            index=1,
+            name="task1",
+            agent="fake",
+            prompt="Inspect this prompt.",
+            status_text="not done",
+            status_style="yellow",
+        )
+        screen = FakeScreen([])
+
+        max_scroll = draw_prompt_window(screen, row, scroll=0)
+
+        drawn_text = "\n".join(screen.drawn_text)
+        self.assertEqual(max_scroll, 0)
+        self.assertIn("Prompt: task1", drawn_text)
+        self.assertIn("Inspect this prompt.", drawn_text)
+        self.assertIn("p/q close", drawn_text)
 
 
 def config_for_fake_agent(mode: str) -> str:
@@ -600,6 +648,7 @@ class FakeScreen:
     def __init__(self, keys: list[int]) -> None:
         self.keys = list(keys)
         self.keypad_enabled = False
+        self.drawn_text: list[str] = []
 
     def keypad(self, enabled: bool) -> None:
         self.keypad_enabled = enabled
@@ -613,8 +662,8 @@ class FakeScreen:
     def getmaxyx(self) -> tuple[int, int]:
         return (24, 80)
 
-    def addnstr(self, *_args) -> None:
-        return None
+    def addnstr(self, *args) -> None:
+        self.drawn_text.append(str(args[2]))
 
     def refresh(self) -> None:
         return None

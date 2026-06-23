@@ -140,8 +140,6 @@ name = "task3"
 agent = "bigpickle"
 prompt = "this task is a test to fail, report failure and exit"
 auto-reset = true
-status = "failure"
-failure_reason = "test task designed to fail"
 
 [[tasks]]
 name = "task2"
@@ -199,4 +197,3 @@ status = "success"
 name = "readme-update"
 agent = "bigpickle"
 prompt = "Check the codebase of this folder, then read the README file. Update it according to the newer functionality available"
-status = "success"

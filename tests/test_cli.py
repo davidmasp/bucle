@@ -19,6 +19,7 @@ from bucle.cli import (
     build_task_rows,
     collect_log_files,
     draw_prompt_window,
+    extract_issue_agent,
     format_task_status,
     init_project,
     load_config,
@@ -28,6 +29,7 @@ from bucle.cli import (
     render_prompt,
     reset_task,
     run_pending_tasks,
+    sync_github_issues,
 )
 
 runner = CliRunner()
@@ -205,6 +207,125 @@ class InitProjectTest(unittest.TestCase):
 
             self.assertEqual(result.exit_code, 0)
             self.assertIn("Initialized bucle project.", result.output)
+
+
+class SyncGithubIssuesTest(unittest.TestCase):
+    def test_extract_issue_agent_reads_agent_line(self) -> None:
+        self.assertEqual(extract_issue_agent("agent:fake\n\nDo work"), "fake")
+        self.assertEqual(extract_issue_agent("agent: fake\n\nDo work"), "fake")
+        self.assertIsNone(extract_issue_agent("Do work"))
+
+    def test_sync_imports_issue_as_task(self) -> None:
+        with temp_config(VALID_CONFIG.format(cmd="echo {{prompt}}")) as config_path:
+            config = load_config(config_path)
+            issue_body = "agent:fake\n\nDo work from GitHub."
+            with patch(
+                "bucle.cli.run_gh_json",
+                side_effect=[
+                    [
+                        {
+                            "id": "I_1",
+                            "author": {"login": "davidmasp"},
+                            "title": "list-title",
+                            "state": "OPEN",
+                            "labels": [{"name": "bucle"}],
+                            "number": 1,
+                        }
+                    ],
+                    {"body": issue_body, "title": "gh-task"},
+                ],
+            ) as run_gh_json:
+                result = sync_github_issues(config, author="davidmasp", tag="bucle")
+
+            document = tomlkit.parse(config_path.read_text())
+
+        self.assertEqual(result.added, 1)
+        self.assertEqual(result.skipped, 0)
+        self.assertIn("Added issue #1 gh-task.", result.messages)
+        self.assertEqual(len(document["tasks"]), 2)
+        self.assertEqual(document["tasks"][1]["name"], "gh-task")
+        self.assertEqual(document["tasks"][1]["agent"], "fake")
+        self.assertEqual(document["tasks"][1]["prompt"], issue_body)
+        self.assertEqual(
+            run_gh_json.call_args_list[0].args,
+            (
+                config.path.parent,
+                [
+                    "issue",
+                    "list",
+                    "--search",
+                    'author:davidmasp label:"bucle"',
+                    "--json",
+                    "id,author,title,state,labels,number",
+                ],
+            ),
+        )
+        self.assertEqual(
+            run_gh_json.call_args_list[1].args,
+            (config.path.parent, ["issue", "view", "1", "--json", "body,title"]),
+        )
+
+    def test_sync_skips_issue_without_agent_line(self) -> None:
+        with temp_config(VALID_CONFIG.format(cmd="echo {{prompt}}")) as config_path:
+            config = load_config(config_path)
+            with patch(
+                "bucle.cli.run_gh_json",
+                side_effect=[
+                    [{"title": "gh-task", "state": "OPEN", "number": 1}],
+                    {"body": "Do work from GitHub.", "title": "gh-task"},
+                ],
+            ):
+                result = sync_github_issues(config, author="davidmasp", tag="bucle")
+
+            document = tomlkit.parse(config_path.read_text())
+
+        self.assertEqual(result.added, 0)
+        self.assertEqual(result.skipped, 1)
+        self.assertIn("Skipped issue #1 gh-task: missing agent line.", result.messages)
+        self.assertEqual(len(document["tasks"]), 1)
+
+    def test_sync_skips_existing_task_title(self) -> None:
+        with temp_config(VALID_CONFIG.format(cmd="echo {{prompt}}")) as config_path:
+            config = load_config(config_path)
+            with patch(
+                "bucle.cli.run_gh_json",
+                side_effect=[
+                    [{"title": "task1", "state": "OPEN", "number": 1}],
+                    {"body": "agent:fake\n\nDo work from GitHub.", "title": "task1"},
+                ],
+            ):
+                result = sync_github_issues(config, author="davidmasp", tag="bucle")
+
+            document = tomlkit.parse(config_path.read_text())
+
+        self.assertEqual(result.added, 0)
+        self.assertEqual(result.skipped, 1)
+        self.assertIn("Skipped issue #1 task1: task already exists.", result.messages)
+        self.assertEqual(len(document["tasks"]), 1)
+
+    def test_sync_cli_reports_results(self) -> None:
+        with temp_config(VALID_CONFIG.format(cmd="echo {{prompt}}")) as config_path:
+            with patch(
+                "bucle.cli.run_gh_json",
+                side_effect=[
+                    [{"title": "gh-task", "state": "OPEN", "number": 1}],
+                    {"body": "agent:fake\n\nDo work from GitHub.", "title": "gh-task"},
+                ],
+            ):
+                result = runner.invoke(
+                    app,
+                    [
+                        "sync",
+                        "--config",
+                        str(config_path),
+                        "--author",
+                        "davidmasp",
+                    ],
+                )
+
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("Added issue #1 gh-task.", result.output)
+        self.assertIn("Synced GitHub issues: 1 added, 0 skipped.", result.output)
 
 
 class RenderReportTest(unittest.TestCase):

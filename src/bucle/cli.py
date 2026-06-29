@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import curses
+import json
 import random
 import re
 import shlex
@@ -41,6 +42,7 @@ LOG_FILENAME_PATTERN = re.compile(
     r"^(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z)_"
     r"(?P<task>.+)\.(?P<agent>[^.]+)\.log$"
 )
+AGENT_LINE_PATTERN = re.compile(r"^\s*agent:\s*(?P<agent>\S+)\s*$", re.MULTILINE)
 DEFAULT_INIT_CONFIG = """[metadata]
 name = "my-project"
 preprompt = "You are a helpful assistant."
@@ -124,6 +126,13 @@ class TaskListRow:
     prompt: str
     status_text: str
     status_style: str
+
+
+@dataclass(frozen=True)
+class SyncResult:
+    added: int
+    skipped: int
+    messages: list[str]
 
 
 def main() -> None:
@@ -241,6 +250,42 @@ def reset(
         typer.echo(f"Reset auto-reset task(s): {reset_count}")
     else:
         typer.echo(f"Reset task: {task_name}")
+
+
+@app.command()
+def sync(
+    author: str = typer.Option(
+        ...,
+        "--author",
+        "--user",
+        "-a",
+        help="GitHub issue author to sync.",
+    ),
+    tag: str = typer.Option(
+        "bucle",
+        "--tag",
+        "--label",
+        "-l",
+        help="GitHub issue label to sync.",
+    ),
+    config: Path = typer.Option(
+        Path(".bucle.toml"),
+        "--config",
+        "-c",
+        help="Path to the .bucle.toml file.",
+    ),
+) -> None:
+    """Import open GitHub issues into the bucle config."""
+    try:
+        bucle_config = load_config(config)
+        result = sync_github_issues(bucle_config, author=author, tag=tag)
+    except ConfigError as error:
+        typer.echo(f"Sync failed: {error}", err=True)
+        raise typer.Exit(1) from error
+
+    for message in result.messages:
+        typer.echo(message)
+    typer.echo(f"Synced GitHub issues: {result.added} added, {result.skipped} skipped.")
 
 
 @app.command("list")
@@ -368,6 +413,148 @@ def append_justfile_recipes(path: Path) -> None:
     text = path.read_text()
     separator = "" if not text or text.endswith("\n") else "\n"
     path.write_text(f"{text}{separator}{BUCLE_JUSTFILE_RECIPES}")
+
+
+def sync_github_issues(config: BucleConfig, author: str, tag: str) -> SyncResult:
+    author = author.strip()
+    tag = tag.strip()
+    if not author:
+        raise ConfigError("author must be a non-empty string")
+    if not tag:
+        raise ConfigError("tag must be a non-empty string")
+
+    added = 0
+    skipped = 0
+    messages: list[str] = []
+    issues = list_github_issues(config, author=author, tag=tag)
+    for issue in issues:
+        if not is_open_issue(issue):
+            continue
+
+        number = issue_number(issue)
+        details = view_github_issue(config, number)
+        title = issue_title(details, fallback=issue.get("title"))
+        body = str(details.get("body") or "")
+        issue_label = f"issue #{number} {title}"
+
+        agent = extract_issue_agent(body)
+        if agent is None:
+            skipped += 1
+            messages.append(f"Skipped {issue_label}: missing agent line.")
+            continue
+        if task_name_exists(config, title):
+            skipped += 1
+            messages.append(f"Skipped {issue_label}: task already exists.")
+            continue
+        if agent not in config.document["agents"]:
+            skipped += 1
+            messages.append(f"Skipped {issue_label}: unknown agent {agent}.")
+            continue
+
+        append_task(config, name=title, agent=agent, prompt=body)
+        added += 1
+        messages.append(f"Added {issue_label}.")
+
+    if added:
+        config.path.write_text(tomlkit.dumps(config.document))
+
+    return SyncResult(added=added, skipped=skipped, messages=messages)
+
+
+def list_github_issues(config: BucleConfig, author: str, tag: str) -> list[Any]:
+    search = f'author:{author} label:"{tag}"'
+    value = run_gh_json(
+        config.root,
+        [
+            "issue",
+            "list",
+            "--search",
+            search,
+            "--json",
+            "id,author,title,state,labels,number",
+        ],
+    )
+    if not isinstance(value, list):
+        raise ConfigError("gh issue list returned invalid JSON")
+    return value
+
+
+def view_github_issue(config: BucleConfig, number: int) -> dict[str, Any]:
+    value = run_gh_json(
+        config.root,
+        ["issue", "view", str(number), "--json", "body,title"],
+    )
+    if not isinstance(value, dict):
+        raise ConfigError(f"gh issue view {number} returned invalid JSON")
+    return value
+
+
+def run_gh_json(cwd: Path, args: list[str]) -> Any:
+    command = ["gh", *args]
+    try:
+        result = subprocess.run(
+            command,
+            cwd=cwd,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except FileNotFoundError as error:
+        raise ConfigError("gh command not found; install GitHub CLI") from error
+
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        message = f"gh command failed: {shlex.join(command)}"
+        if detail:
+            message = f"{message}: {detail}"
+        raise ConfigError(message)
+
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise ConfigError("gh returned invalid JSON") from error
+
+
+def is_open_issue(issue: Any) -> bool:
+    if not is_mapping(issue):
+        raise ConfigError("gh issue list returned an invalid issue")
+    state = issue.get("state")
+    return state is None or str(state).lower() == "open"
+
+
+def issue_number(issue: Any) -> int:
+    if not is_mapping(issue):
+        raise ConfigError("gh issue list returned an invalid issue")
+    number = issue.get("number")
+    if not isinstance(number, int):
+        raise ConfigError("gh issue list returned an issue without a numeric number")
+    return number
+
+
+def issue_title(issue: dict[str, Any], fallback: Any = None) -> str:
+    title = issue.get("title") or fallback
+    if not isinstance(title, str) or not title.strip():
+        raise ConfigError("gh issue returned an issue without a title")
+    return title.strip()
+
+
+def extract_issue_agent(body: str) -> str | None:
+    match = AGENT_LINE_PATTERN.search(body)
+    if match is None:
+        return None
+    return match.group("agent")
+
+
+def task_name_exists(config: BucleConfig, name: str) -> bool:
+    return any(str(task["name"]) == name for task in config.document["tasks"])
+
+
+def append_task(config: BucleConfig, name: str, agent: str, prompt: str) -> None:
+    task = tomlkit.table()
+    task.add("name", name)
+    task.add("agent", agent)
+    task.add("prompt", prompt)
+    config.document["tasks"].append(task)
 
 
 def validate_config(config: BucleConfig) -> None:

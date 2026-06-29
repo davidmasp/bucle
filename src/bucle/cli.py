@@ -17,6 +17,14 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from bucle.commands.check import check
+from bucle.commands.init import init
+from bucle.commands.render import render
+from bucle.commands.reset import reset
+from bucle.commands.run import run
+from bucle.commands.sync import sync
+from bucle.commands.tasks import tasks
+from bucle.commands.tui import tui
 from bucle.helpers import (
     ConfigError,
     cleanup_marker,
@@ -72,6 +80,16 @@ bucle-list:
 """
 
 app = typer.Typer(help="Run agent tasks from a .bucle.toml file.")
+
+app.command()(init)
+app.command()(check)
+app.command()(run)
+app.command()(reset)
+app.command()(sync)
+app.command()(tasks)
+app.command("list")(tasks)
+app.command()(tui)
+app.command()(render)
 
 
 @dataclass(frozen=True)
@@ -137,226 +155,6 @@ class SyncResult:
 
 def main() -> None:
     app()
-
-
-@app.command()
-def init() -> None:
-    """Create the default bucle files in the current directory."""
-    try:
-        init_project(Path.cwd())
-    except ConfigError as error:
-        typer.echo(f"Init failed: {error}", err=True)
-        raise typer.Exit(1) from error
-
-    typer.echo("Initialized bucle project.")
-
-
-@app.command()
-def check(
-    config: Path = typer.Option(
-        Path(".bucle.toml"),
-        "--config",
-        "-c",
-        help="Path to the .bucle.toml file.",
-    ),
-) -> None:
-    """Validate a bucle config file."""
-    try:
-        load_config(config)
-    except ConfigError as error:
-        typer.echo(f"Invalid config: {error}", err=True)
-        raise typer.Exit(1) from error
-
-    typer.echo(f"Config OK: {config}")
-
-
-@app.command()
-def run(
-    config: Path = typer.Option(
-        Path(".bucle.toml"),
-        "--config",
-        "-c",
-        help="Path to the .bucle.toml file.",
-    ),
-    reverse: bool = typer.Option(
-        False,
-        "--reverse",
-        help="Run pending tasks from last to first.",
-    ),
-    shuffle: bool = typer.Option(
-        False,
-        "--shuffle",
-        help="Run pending tasks in random order.",
-    ),
-    verbose: bool = typer.Option(
-        False,
-        "--verbose",
-        "-v",
-        help="Print task launch details while running.",
-    ),
-    limit: int | None = typer.Option(
-        None,
-        "--limit",
-        help="Maximum number of pending tasks to run.",
-    ),
-) -> None:
-    """Run pending tasks and reconcile marker files into the TOML config."""
-    try:
-        bucle_config = load_config(config)
-        ran_tasks = run_pending_tasks(
-            bucle_config,
-            reverse=reverse,
-            shuffle=shuffle,
-            verbose=verbose,
-            limit=limit,
-        )
-        reconcile_results(bucle_config, ran_tasks)
-    except ConfigError as error:
-        typer.echo(f"Invalid config: {error}", err=True)
-        raise typer.Exit(1) from error
-
-    typer.echo(f"Completed run: {len(ran_tasks)} pending task(s) processed.")
-
-
-@app.command()
-def reset(
-    task_name: str | None = typer.Argument(None, help="Name of the task to reset."),
-    config: Path = typer.Option(
-        Path(".bucle.toml"),
-        "--config",
-        "-c",
-        help="Path to the .bucle.toml file.",
-    ),
-    auto: bool = typer.Option(
-        False,
-        "--auto",
-        help="Reset all tasks marked with auto-reset = true.",
-    ),
-) -> None:
-    """Reset a task so it can be run again."""
-    try:
-        bucle_config = load_config(config)
-        if auto:
-            reset_count = reset_auto_tasks(bucle_config)
-        else:
-            if task_name is None:
-                raise ConfigError("task name is required unless --auto is used")
-            reset_task(bucle_config, task_name)
-    except ConfigError as error:
-        typer.echo(f"Invalid config: {error}", err=True)
-        raise typer.Exit(1) from error
-
-    if auto:
-        typer.echo(f"Reset auto-reset task(s): {reset_count}")
-    else:
-        typer.echo(f"Reset task: {task_name}")
-
-
-@app.command()
-def sync(
-    author: str = typer.Option(
-        ...,
-        "--author",
-        "--user",
-        "-a",
-        help="GitHub issue author to sync.",
-    ),
-    tag: str = typer.Option(
-        "bucle",
-        "--tag",
-        "--label",
-        "-l",
-        help="GitHub issue label to sync.",
-    ),
-    config: Path = typer.Option(
-        Path(".bucle.toml"),
-        "--config",
-        "-c",
-        help="Path to the .bucle.toml file.",
-    ),
-) -> None:
-    """Import open GitHub issues into the bucle config."""
-    try:
-        bucle_config = load_config(config)
-        result = sync_github_issues(bucle_config, author=author, tag=tag)
-    except ConfigError as error:
-        typer.echo(f"Sync failed: {error}", err=True)
-        raise typer.Exit(1) from error
-
-    for message in result.messages:
-        typer.echo(message)
-    typer.echo(f"Synced GitHub issues: {result.added} added, {result.skipped} skipped.")
-
-
-@app.command("list")
-@app.command()
-def tasks(
-    config: Path = typer.Option(
-        Path(".bucle.toml"),
-        "--config",
-        "-c",
-        help="Path to the .bucle.toml file.",
-    ),
-    limit: int | None = typer.Option(
-        None,
-        "--limit",
-        help="Maximum number of tasks to list.",
-    ),
-) -> None:
-    """List configured tasks and their current status."""
-    try:
-        bucle_config = load_config(config)
-    except ConfigError as error:
-        typer.echo(f"Invalid config: {error}", err=True)
-        raise typer.Exit(1) from error
-
-    print_tasks(bucle_config, limit=limit)
-
-
-@app.command()
-def tui(
-    config: Path = typer.Option(
-        Path(".bucle.toml"),
-        "--config",
-        "-c",
-        help="Path to the .bucle.toml file.",
-    ),
-    limit: int | None = typer.Option(
-        None,
-        "--limit",
-        help="Maximum number of tasks to show.",
-    ),
-) -> None:
-    """Open an interactive task list TUI."""
-    try:
-        bucle_config = load_config(config)
-        launch_tui(bucle_config, limit=limit)
-    except ConfigError as error:
-        typer.echo(f"Invalid config: {error}", err=True)
-        raise typer.Exit(1) from error
-    except curses.error as error:
-        typer.echo(f"TUI failed: {error}", err=True)
-        raise typer.Exit(1) from error
-
-
-@app.command()
-def render(
-    config: Path = typer.Option(
-        Path(".bucle.toml"),
-        "--config",
-        "-c",
-        help="Path to the .bucle.toml file.",
-    ),
-) -> None:
-    """Render task and log HTML files into the .bucle directory."""
-    try:
-        bucle_config = load_config(config)
-        report_path = render_site(bucle_config)
-    except ConfigError as error:
-        typer.echo(f"Render failed: {error}", err=True)
-        raise typer.Exit(1) from error
-
-    typer.echo(f"Rendered bucle report: {report_path}")
 
 
 def load_config(path: Path) -> BucleConfig:

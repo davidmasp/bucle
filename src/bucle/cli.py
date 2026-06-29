@@ -50,7 +50,7 @@ LOG_FILENAME_PATTERN = re.compile(
     r"^(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z)_"
     r"(?P<task>.+)\.(?P<agent>[^.]+)\.log$"
 )
-AGENT_LINE_PATTERN = re.compile(r"^\s*agent:\s*(?P<agent>\S+)\s*$", re.MULTILINE)
+AGENT_LINE_PATTERN = re.compile(r"^[ \t]*agent:[ \t]*(?P<agent>\S+)[ \t]*\r?$", re.MULTILINE)
 DEFAULT_INIT_CONFIG = """[metadata]
 name = "my-project"
 preprompt = "You are a helpful assistant."
@@ -249,7 +249,8 @@ def sync_github_issues(config: BucleConfig, author: str, tag: str) -> SyncResult
             messages.append(f"Skipped {issue_label}: unknown agent {agent}.")
             continue
 
-        append_task(config, name=title, agent=agent, prompt=body)
+        prompt = remove_issue_agent_line(body)
+        append_task(config, name=title, agent=agent, prompt=prompt)
         added += 1
         messages.append(f"Added {issue_label}.")
 
@@ -343,6 +344,27 @@ def extract_issue_agent(body: str) -> str | None:
     return match.group("agent")
 
 
+def remove_issue_agent_line(body: str) -> str:
+    match = AGENT_LINE_PATTERN.search(body)
+    if match is None:
+        return body
+
+    start, end = match.span()
+    if end < len(body) and body[end : end + 2] == "\r\n":
+        end += 2
+    elif end < len(body) and body[end] in "\r\n":
+        end += 1
+    elif start > 0 and body[start - 1] == "\n":
+        start -= 1
+        if start > 0 and body[start - 1] == "\r":
+            start -= 1
+
+    prompt = body[:start] + body[end:]
+    if start == 0:
+        prompt = prompt.lstrip("\r\n")
+    return prompt
+
+
 def task_name_exists(config: BucleConfig, name: str) -> bool:
     return any(str(task["name"]) == name for task in config.document["tasks"])
 
@@ -351,7 +373,10 @@ def append_task(config: BucleConfig, name: str, agent: str, prompt: str) -> None
     task = tomlkit.table()
     task.add("name", name)
     task.add("agent", agent)
-    task.add("prompt", prompt)
+    toml_prompt = prompt
+    if not toml_prompt.endswith(("\r", "\n")):
+        toml_prompt = f"{toml_prompt}\n"
+    task.add("prompt", tomlkit.string(f"\n{toml_prompt}", multiline=True))
     config.document["tasks"].append(task)
 
 

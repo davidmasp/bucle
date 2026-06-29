@@ -24,6 +24,7 @@ from bucle.cli import (
     init_project,
     load_config,
     reconcile_results,
+    remove_issue_agent_line,
     reset_auto_tasks,
     render_site,
     render_prompt,
@@ -215,10 +216,21 @@ class SyncGithubIssuesTest(unittest.TestCase):
         self.assertEqual(extract_issue_agent("agent: fake\n\nDo work"), "fake")
         self.assertIsNone(extract_issue_agent("Do work"))
 
+    def test_remove_issue_agent_line_removes_parsed_agent_line(self) -> None:
+        self.assertEqual(
+            remove_issue_agent_line("agent:fake\n\nDo work"),
+            "Do work",
+        )
+        self.assertEqual(
+            remove_issue_agent_line("Intro\r\nagent: fake\r\nDo work"),
+            "Intro\r\nDo work",
+        )
+
     def test_sync_imports_issue_as_task(self) -> None:
         with temp_config(VALID_CONFIG.format(cmd="echo {{prompt}}")) as config_path:
             config = load_config(config_path)
-            issue_body = "agent:fake\n\nDo work from GitHub."
+            issue_body = "agent:fake\n\nDo work from GitHub.\n\n- first\n- second"
+            expected_prompt = "Do work from GitHub.\n\n- first\n- second\n"
             with patch(
                 "bucle.cli.run_gh_json",
                 side_effect=[
@@ -237,7 +249,8 @@ class SyncGithubIssuesTest(unittest.TestCase):
             ) as run_gh_json:
                 result = sync_github_issues(config, author="davidmasp", tag="bucle")
 
-            document = tomlkit.parse(config_path.read_text())
+            config_text = config_path.read_text()
+            document = tomlkit.parse(config_text)
 
         self.assertEqual(result.added, 1)
         self.assertEqual(result.skipped, 0)
@@ -245,7 +258,9 @@ class SyncGithubIssuesTest(unittest.TestCase):
         self.assertEqual(len(document["tasks"]), 2)
         self.assertEqual(document["tasks"][1]["name"], "gh-task")
         self.assertEqual(document["tasks"][1]["agent"], "fake")
-        self.assertEqual(document["tasks"][1]["prompt"], issue_body)
+        self.assertEqual(document["tasks"][1]["prompt"], expected_prompt)
+        self.assertIn('prompt = """\nDo work from GitHub.\n\n- first\n- second\n"""', config_text)
+        self.assertNotIn("agent:fake", config_text)
         self.assertEqual(
             run_gh_json.call_args_list[0].args,
             (

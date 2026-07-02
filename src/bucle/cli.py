@@ -292,6 +292,7 @@ def run_pending_tasks(
     console = Console() if verbose else None
     total_tasks = len(pending_tasks)
     for task_number, task in enumerate(pending_tasks, start=1):
+        prepare_task_markers(config, task)
         command = render_command(config, task)
         started_at = datetime.now(timezone.utc)
         log_path = task_log_path(config, task, started_at)
@@ -306,6 +307,7 @@ def run_pending_tasks(
             result = run_task_command(config, task, command)
         ended_at = datetime.now(timezone.utc)
         write_task_log(log_path, task, command, started_at, ended_at, result)
+        flush_task_markers(config, task)
 
     return pending_tasks
 
@@ -801,7 +803,36 @@ def completion_contract(config: BucleConfig, task: RunTask) -> str:
 
 
 def task_marker_path(config: BucleConfig, task: RunTask, filename: str) -> str:
+    if task.cwd is not None:
+        return f"{BUCLE_DIR}/{filename}"
     return os.path.relpath(config.output_dir / filename, task_cwd(config, task))
+
+
+def prepare_task_markers(config: BucleConfig, task: RunTask) -> None:
+    if task.cwd is None:
+        return
+    task_output_dir(config, task).mkdir(exist_ok=True)
+
+
+def flush_task_markers(config: BucleConfig, task: RunTask) -> None:
+    if task.cwd is None:
+        return
+    flush_task_marker(
+        task_output_dir(config, task) / SUCCESS_MARKER,
+        config.success_marker,
+    )
+    flush_task_marker(
+        task_output_dir(config, task) / FAILURE_MARKER,
+        config.failure_marker,
+    )
+
+
+def flush_task_marker(source: Path, destination: Path) -> None:
+    if not source.exists():
+        return
+    with destination.open("a") as destination_handle:
+        destination_handle.write(source.read_text())
+    cleanup_marker(source)
 
 
 def write_task_log(
@@ -850,6 +881,10 @@ def task_cwd(config: BucleConfig, task: RunTask) -> Path:
     if task.cwd is None:
         return config.root
     return config.root / task.cwd
+
+
+def task_output_dir(config: BucleConfig, task: RunTask) -> Path:
+    return task_cwd(config, task) / BUCLE_DIR
 
 
 def task_log_path(config: BucleConfig, task: RunTask, started_at: datetime) -> Path:

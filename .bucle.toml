@@ -9,6 +9,7 @@ cmd = "codex exec {{prompt}}"
 [agents.codexmini]
 cmd = "codex exec --model gpt-5.4-mini -c model_reasoning_effort=low {{prompt}}"
 
+## this is not working for some reason...
 [agents.bigpickle]
 cmd = "opencode run --model opencode/big-pickle {{prompt}}"
 
@@ -45,6 +46,7 @@ contact_links:
     about: Please ask questions in Discussions.
 
 """
+status = "success"
 
 
 [[tasks]]
@@ -67,6 +69,7 @@ For instance, src/bucle/cli.py:364-486
 
 Let's start facotrizing only the sync command for now.
 """
+status = "success"
 
 
 [[tasks]]
@@ -248,8 +251,10 @@ status = "success"
 
 [[tasks]]
 name = "readme-update"
-agent = "bigpickle"
+agent = "codexmini"
 prompt = "Check the codebase of this folder, then read the README file. Update it according to the newer functionality available"
+
+
 [[tasks]]
 name = "reverse-sync"
 agent = "opencode"
@@ -257,6 +262,7 @@ prompt = """
 For the sync command, I want to add an argument that reverses the addition of the task commands, the idea is that it will add the issue task on top, instead of on the bottom of the TOML file.
 """
 status = "success"
+
 [[tasks]]
 name = "create-issue-form"
 agent = "opencode"
@@ -275,6 +281,7 @@ an example block would be.
 ```
 """
 status = "success"
+
 [[tasks]]
 name = "adding-cwd-parameter"
 agent = "opencode"

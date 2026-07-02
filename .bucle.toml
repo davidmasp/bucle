@@ -17,6 +17,36 @@ cmd = "opencode run --model openai/gpt-5.5 {{prompt}}"
 
 ## we need to include some sort of git integration but we are not sure how to do it, we could do it in the agent itself, but maybe it's better to do it in the tool. For instance, after every task, we could commit the changes with a random message. We could even generate the commit message with the external LLM handled by bucle itself, for instance, we could have a API call like "generate commit message" that would take as input the name of the task and the status (success or failure) and then it would generate a commit message that we could use for the commit.
 
+
+[[tasks]]
+name = "issue-template-not-working"
+agent = "opencode"
+prompt = """
+I think the current issue template situation is not working.
+
+i dont see the template in the create a issue.
+
+I feel we should add a config.yml file or smth.
+
+Smth like this
+
+.github/
+├── ISSUE_TEMPLATE/
+│   ├── bug_report.yml
+│   └── config.yml
+
+---
+
+blank_issues_enabled: true
+
+contact_links:
+  - name: Questions
+    url: https://github.com/my-org/my-repo/discussions
+    about: Please ask questions in Discussions.
+
+"""
+
+
 [[tasks]]
 name = "bucle-factorize-synclogic"
 agent = "opencode"

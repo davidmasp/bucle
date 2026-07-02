@@ -19,19 +19,21 @@ from bucle.cli import (
     build_task_rows,
     collect_log_files,
     draw_prompt_window,
-    extract_issue_agent,
-    extract_issue_cwd,
-    extract_issue_metadata,
     format_task_status,
     init_project,
     load_config,
     reconcile_results,
-    remove_issue_agent_line,
     reset_auto_tasks,
     render_site,
     render_prompt,
     reset_task,
     run_pending_tasks,
+)
+from bucle.sync import (
+    extract_issue_agent,
+    extract_issue_cwd,
+    extract_issue_metadata,
+    remove_issue_agent_line,
     sync_github_issues,
 )
 
@@ -295,7 +297,7 @@ class SyncGithubIssuesTest(unittest.TestCase):
             issue_body = "agent:fake\n\nDo work from GitHub.\n\n- first\n- second"
             expected_prompt = "Do work from GitHub.\n\n- first\n- second\n"
             with patch(
-                "bucle.cli.run_gh_json",
+                "bucle.sync.run_gh_json",
                 side_effect=[
                     [
                         {
@@ -348,7 +350,7 @@ class SyncGithubIssuesTest(unittest.TestCase):
             config = load_config(config_path)
             issue_body = '```yaml\ncwd: "./pkg"\nagent: fake\n```\n\nDo work from GitHub.'
             with patch(
-                "bucle.cli.run_gh_json",
+                "bucle.sync.run_gh_json",
                 side_effect=[
                     [{"title": "gh-task", "state": "OPEN", "number": 1}],
                     {"body": issue_body, "title": "gh-task"},
@@ -369,7 +371,7 @@ class SyncGithubIssuesTest(unittest.TestCase):
             config = load_config(config_path)
             issue_body = 'cwd:"./pkg"\nagent:fake\n\nDo work from GitHub.'
             with patch(
-                "bucle.cli.run_gh_json",
+                "bucle.sync.run_gh_json",
                 side_effect=[
                     [{"title": "gh-task", "state": "OPEN", "number": 1}],
                     {"body": issue_body, "title": "gh-task"},
@@ -387,7 +389,7 @@ class SyncGithubIssuesTest(unittest.TestCase):
         with temp_config(VALID_CONFIG.format(cmd="echo {{prompt}}")) as config_path:
             config = load_config(config_path)
             with patch(
-                "bucle.cli.run_gh_json",
+                "bucle.sync.run_gh_json",
                 side_effect=[
                     [
                         {"title": "first", "state": "OPEN", "number": 1},
@@ -413,7 +415,7 @@ class SyncGithubIssuesTest(unittest.TestCase):
         with temp_config(VALID_CONFIG.format(cmd="echo {{prompt}}")) as config_path:
             config = load_config(config_path)
             with patch(
-                "bucle.cli.run_gh_json",
+                "bucle.sync.run_gh_json",
                 side_effect=[
                     [{"title": "gh-task", "state": "OPEN", "number": 1}],
                     {"body": "Do work from GitHub.", "title": "gh-task"},
@@ -432,7 +434,7 @@ class SyncGithubIssuesTest(unittest.TestCase):
         with temp_config(VALID_CONFIG.format(cmd="echo {{prompt}}")) as config_path:
             config = load_config(config_path)
             with patch(
-                "bucle.cli.run_gh_json",
+                "bucle.sync.run_gh_json",
                 side_effect=[
                     [{"title": "task1", "state": "OPEN", "number": 1}],
                     {"body": "agent:fake\n\nDo work from GitHub.", "title": "task1"},
@@ -450,7 +452,7 @@ class SyncGithubIssuesTest(unittest.TestCase):
     def test_sync_cli_reports_results(self) -> None:
         with temp_config(VALID_CONFIG.format(cmd="echo {{prompt}}")) as config_path:
             with patch(
-                "bucle.cli.run_gh_json",
+                "bucle.sync.run_gh_json",
                 side_effect=[
                     [{"title": "gh-task", "state": "OPEN", "number": 1}],
                     {"body": "agent:fake\n\nDo work from GitHub.", "title": "gh-task"},
@@ -474,7 +476,7 @@ class SyncGithubIssuesTest(unittest.TestCase):
     def test_sync_cli_reverse_adds_issue_before_existing_tasks(self) -> None:
         with temp_config(VALID_CONFIG.format(cmd="echo {{prompt}}")) as config_path:
             with patch(
-                "bucle.cli.run_gh_json",
+                "bucle.sync.run_gh_json",
                 side_effect=[
                     [{"title": "gh-task", "state": "OPEN", "number": 1}],
                     {"body": "agent:fake\n\nDo work from GitHub.", "title": "gh-task"},

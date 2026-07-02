@@ -36,7 +36,8 @@ def sync(
     ),
 ) -> None:
     """Import open GitHub issues into the bucle config."""
-    from bucle.cli import load_config, sync_github_issues
+    from bucle.cli import load_config
+    from bucle.sync import sync_github_issues
 
     try:
         bucle_config = load_config(config)

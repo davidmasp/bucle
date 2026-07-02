@@ -1,0 +1,34 @@
+name: bucle issue
+description: Create a bucle task issue that can be imported with bucle sync.
+title: ""
+labels:
+  - bucle
+body:
+  - type: textarea
+    id: bucle-metadata
+    attributes:
+      label: Bucle sync metadata
+      description: Keep this YAML block at the beginning of the issue body so `bucle sync` can parse the task variables.
+      value: |
+        ```yaml
+        cwd: ""
+        agent: opencode
+        ```
+    validations:
+      required: true
+  - type: input
+    id: task-title
+    attributes:
+      label: Title of the task
+      description: Use the same title as the GitHub issue title; bucle imports the issue title as the task name.
+      placeholder: Add the task title
+    validations:
+      required: true
+  - type: textarea
+    id: task-prompt
+    attributes:
+      label: Task prompt
+      description: Describe what the agent should do.
+      placeholder: Describe the task for bucle to run.
+    validations:
+      required: true

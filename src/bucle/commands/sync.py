@@ -22,6 +22,12 @@ def sync(
         "-l",
         help="GitHub issue label to sync.",
     ),
+    reverse: bool = typer.Option(
+        False,
+        "--reverse",
+        "-r",
+        help="Add imported issue tasks before existing tasks.",
+    ),
     config: Path = typer.Option(
         Path(".bucle.toml"),
         "--config",
@@ -34,7 +40,7 @@ def sync(
 
     try:
         bucle_config = load_config(config)
-        result = sync_github_issues(bucle_config, author=author, tag=tag)
+        result = sync_github_issues(bucle_config, author=author, tag=tag, reverse=reverse)
     except ConfigError as error:
         typer.echo(f"Sync failed: {error}", err=True)
         raise typer.Exit(1) from error

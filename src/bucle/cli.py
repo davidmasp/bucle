@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import curses
 import json
+import os
 import random
 import re
 import shlex
@@ -51,6 +52,18 @@ LOG_FILENAME_PATTERN = re.compile(
     r"(?P<task>.+)\.(?P<agent>[^.]+)\.log$"
 )
 AGENT_LINE_PATTERN = re.compile(r"^[ \t]*agent:[ \t]*(?P<agent>\S+)[ \t]*\r?$", re.MULTILINE)
+CWD_LINE_PATTERN = re.compile(
+    r"^[ \t]*cwd:[ \t]*(?P<cwd>\"[^\"\r\n]*\"|'[^'\r\n]*'|\S+)[ \t]*\r?$",
+    re.MULTILINE,
+)
+ISSUE_YAML_BLOCK_PATTERN = re.compile(
+    r"\A(?:[ \t]*#{1,6}[^\r\n]*\r?\n+)?"
+    r"[ \t]*```(?:ya?ml)[ \t]*\r?\n(?P<yaml>.*?)(?:\r?\n)```[ \t]*(?:\r?\n)?",
+    re.DOTALL | re.IGNORECASE,
+)
+ISSUE_YAML_LINE_PATTERN = re.compile(
+    r"^[ \t]*(?P<key>[^:#\r\n][^:\r\n]*):[ \t]*(?P<value>.*?)[ \t]*$"
+)
 DEFAULT_INIT_CONFIG = """[metadata]
 name = "my-project"
 preprompt = "You are a helpful assistant."
@@ -119,6 +132,7 @@ class RunTask:
     name: str
     agent: str
     prompt: str
+    cwd: str | None
     index: int
 
 
@@ -213,7 +227,9 @@ def append_justfile_recipes(path: Path) -> None:
     path.write_text(f"{text}{separator}{BUCLE_JUSTFILE_RECIPES}")
 
 
-def sync_github_issues(config: BucleConfig, author: str, tag: str) -> SyncResult:
+def sync_github_issues(
+    config: BucleConfig, author: str, tag: str, reverse: bool = False
+) -> SyncResult:
     author = author.strip()
     tag = tag.strip()
     if not author:
@@ -249,8 +265,17 @@ def sync_github_issues(config: BucleConfig, author: str, tag: str) -> SyncResult
             messages.append(f"Skipped {issue_label}: unknown agent {agent}.")
             continue
 
+        cwd = extract_issue_cwd(body)
         prompt = remove_issue_agent_line(body)
-        append_task(config, name=title, agent=agent, prompt=prompt)
+        insert_index = added if reverse else None
+        append_task(
+            config,
+            name=title,
+            agent=agent,
+            prompt=prompt,
+            cwd=cwd,
+            index=insert_index,
+        )
         added += 1
         messages.append(f"Added {issue_label}.")
 
@@ -338,14 +363,83 @@ def issue_title(issue: dict[str, Any], fallback: Any = None) -> str:
 
 
 def extract_issue_agent(body: str) -> str | None:
+    metadata = extract_issue_metadata(body)
+    if metadata is not None:
+        return metadata.get("agent")
+
     match = AGENT_LINE_PATTERN.search(body)
     if match is None:
         return None
     return match.group("agent")
 
 
+def extract_issue_cwd(body: str) -> str | None:
+    metadata = extract_issue_metadata(body)
+    if metadata is not None:
+        return metadata.get("cwd") or None
+
+    match = CWD_LINE_PATTERN.search(body)
+    if match is None:
+        return None
+    return parse_issue_yaml_scalar(match.group("cwd")) or None
+
+
+def extract_issue_metadata(body: str) -> dict[str, str] | None:
+    match = ISSUE_YAML_BLOCK_PATTERN.match(body)
+    if match is None:
+        return None
+
+    metadata: dict[str, str] = {}
+    for line in match.group("yaml").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+
+        line_match = ISSUE_YAML_LINE_PATTERN.match(line)
+        if line_match is None:
+            continue
+
+        key = normalize_issue_metadata_key(line_match.group("key"))
+        if key is None:
+            continue
+
+        value = parse_issue_yaml_scalar(line_match.group("value"))
+        metadata[key] = value
+
+    return metadata
+
+
+def normalize_issue_metadata_key(key: str) -> str | None:
+    normalized = key.strip().strip("<>").lower().replace("-", "_")
+    if normalized in {"agent", "var_for_agent"}:
+        return "agent"
+    if normalized in {"cwd", "dir", "var_for_dir"}:
+        return "cwd"
+    return None
+
+
+def parse_issue_yaml_scalar(value: str) -> str:
+    value = value.strip()
+    if value in {r'\"\"', r"\'\'"}:
+        return ""
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+        value = value[1:-1]
+    return value.replace(r'\"', '"').replace(r"\'", "'").strip()
+
+
 def remove_issue_agent_line(body: str) -> str:
-    match = AGENT_LINE_PATTERN.search(body)
+    match = ISSUE_YAML_BLOCK_PATTERN.match(body)
+    if match is not None:
+        return body[match.end() :].lstrip("\r\n")
+
+    prompt = body
+    for pattern in (AGENT_LINE_PATTERN, CWD_LINE_PATTERN):
+        prompt = remove_issue_line(prompt, pattern)
+    return prompt
+
+
+def remove_issue_line(body: str, pattern: re.Pattern[str]) -> str:
+    match = pattern.search(body)
     if match is None:
         return body
 
@@ -369,15 +463,27 @@ def task_name_exists(config: BucleConfig, name: str) -> bool:
     return any(str(task["name"]) == name for task in config.document["tasks"])
 
 
-def append_task(config: BucleConfig, name: str, agent: str, prompt: str) -> None:
+def append_task(
+    config: BucleConfig,
+    name: str,
+    agent: str,
+    prompt: str,
+    cwd: str | None = None,
+    index: int | None = None,
+) -> None:
     task = tomlkit.table()
     task.add("name", name)
     task.add("agent", agent)
+    if cwd:
+        task.add("cwd", cwd)
     toml_prompt = prompt
     if not toml_prompt.endswith(("\r", "\n")):
         toml_prompt = f"{toml_prompt}\n"
     task.add("prompt", tomlkit.string(f"\n{toml_prompt}", multiline=True))
-    config.document["tasks"].append(task)
+    if index is None:
+        config.document["tasks"].append(task)
+    else:
+        config.document["tasks"].insert(index, task)
 
 
 def validate_config(config: BucleConfig) -> None:
@@ -416,6 +522,9 @@ def validate_config(config: BucleConfig) -> None:
 
         task_agent = require_string(task, "agent", f"tasks[{index}].agent")
         require_string(task, "prompt", f"tasks[{index}].prompt")
+        task_cwd = task.get("cwd")
+        if task_cwd is not None:
+            validate_task_cwd(task_cwd, f"tasks[{index}].cwd")
         if task_agent not in agent_names:
             raise ConfigError(
                 f"tasks[{index}].agent references unknown agent: {task_agent}"
@@ -431,6 +540,14 @@ def validate_config(config: BucleConfig) -> None:
         auto_reset = task.get("auto-reset")
         if auto_reset is not None and not isinstance(auto_reset, bool):
             raise ConfigError(f"tasks[{index}].auto-reset must be a boolean")
+
+
+def validate_task_cwd(value: Any, label: str) -> None:
+    if not isinstance(value, str) or not value:
+        raise ConfigError(f"{label} must be a non-empty string")
+    cwd_path = Path(value)
+    if cwd_path.is_absolute():
+        raise ConfigError(f"{label} must be relative to the repository root")
 
 
 def run_pending_tasks(
@@ -464,9 +581,9 @@ def run_pending_tasks(
                 f"(log: {log_path})"
             )
             with console.status(f"Running task {task.name}", spinner="moon"):
-                result = run_task_command(config, command)
+                result = run_task_command(config, task, command)
         else:
-            result = run_task_command(config, command)
+            result = run_task_command(config, task, command)
         ended_at = datetime.now(timezone.utc)
         write_task_log(log_path, task, command, started_at, ended_at, result)
 
@@ -915,6 +1032,7 @@ def get_pending_tasks(config: BucleConfig) -> list[RunTask]:
                 name=str(task["name"]),
                 agent=str(task["agent"]),
                 prompt=str(task["prompt"]),
+                cwd=str(task["cwd"]) if task.get("cwd") is not None else None,
                 index=index,
             )
         )
@@ -948,16 +1066,22 @@ def render_prompt(config: BucleConfig, task: RunTask) -> str:
 
 
 def completion_contract(config: BucleConfig, task: RunTask) -> str:
+    success_marker = task_marker_path(config, task, SUCCESS_MARKER)
+    failure_marker = task_marker_path(config, task, FAILURE_MARKER)
     return (
         "Bucle completion contract:\n"
         f"- Do not edit {config.path.name}.\n"
         f"- When task '{task.name}' succeeds, run: "
-        f'echo "{task.name}" >> {BUCLE_DIR}/{SUCCESS_MARKER}.\n'
+        f'echo "{task.name}" >> {success_marker}.\n'
         f"- When task '{task.name}' fails, run: "
-        f'echo "{task.name},<reason>" >> {BUCLE_DIR}/{FAILURE_MARKER}.\n'
+        f'echo "{task.name},<reason>" >> {failure_marker}.\n'
         "- Update exactly one marker file for this task.\n"
         "- Valid final TOML statuses are: success, failure, uncompleted."
     )
+
+
+def task_marker_path(config: BucleConfig, task: RunTask, filename: str) -> str:
+    return os.path.relpath(config.output_dir / filename, task_cwd(config, task))
 
 
 def write_task_log(
@@ -990,16 +1114,22 @@ def write_task_log(
 
 
 def run_task_command(
-    config: BucleConfig, command: str
+    config: BucleConfig, task: RunTask, command: str
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(  # noqa: S602 - commands are trusted local config.
         command,
-        cwd=config.root,
+        cwd=task_cwd(config, task),
         shell=True,
         text=True,
         capture_output=True,
         check=False,
     )
+
+
+def task_cwd(config: BucleConfig, task: RunTask) -> Path:
+    if task.cwd is None:
+        return config.root
+    return config.root / task.cwd
 
 
 def task_log_path(config: BucleConfig, task: RunTask, started_at: datetime) -> Path:

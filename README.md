@@ -73,15 +73,54 @@ auto-reset = true
 ```
 bucle check   [--config / -c]       Validate the config file
 bucle init                         Create .bucle/, .bucle.toml, and update .gitignore
+bucle run     [--config / -c] [--reverse] [--shuffle] [--limit N] [-v]  Run pending tasks and reconcile results
+bucle sync    [--config / -c] --author <user> [--tag bucle]  Import GitHub issues as tasks
 bucle tasks   [--config / -c] [--limit N]       List tasks in a Rich table
 bucle list    [--config / -c] [--limit N]       Alias for `bucle tasks`
-bucle render  [--config / -c]       Render .bucle/index.html and per-log HTML pages
-bucle run     [--config / -c] [--reverse] [--shuffle] [--limit N] [-v]  Run pending tasks and reconcile results
 bucle reset   <task-name> [-c]      Reset a task to pending
 bucle reset   --auto [-c]           Reset all tasks marked `auto-reset = true`
+bucle tui     [--config / -c] [--limit N]       Interactive terminal UI
+bucle render  [--config / -c]       Render .bucle/index.html and per-log HTML pages
 ```
 
 All commands accept `--config / -c` (defaults to `.bucle.toml`).
+
+### `bucle sync`
+
+Import open GitHub issues into the bucle config as new tasks:
+
+```sh
+bucle sync --author <github-user> --tag bucle
+bucle sync --author davidmasp --tag bucle -c .bucle.toml
+bucle sync --user davidmasp --label bucle
+```
+
+Scans open issues with the given author and label. Each issue whose body
+contains a line like `agent:<name>` gets parsed into a task entry appended
+to the TOML file. Issues without an agent line, referencing an unknown agent,
+or matching an existing task name are skipped.
+
+| Option              | Default    | Description                     |
+|---------------------|------------|---------------------------------|
+| `--author` / `--user` / `-a` | *required* | GitHub issue author       |
+| `--tag` / `--label` / `-l`   | `bucle`    | Issue label to match      |
+
+### `bucle tui`
+
+Open an interactive terminal UI for browsing and managing tasks:
+
+```sh
+bucle tui
+bucle tui --limit 10
+```
+
+| Key       | Action                         |
+|-----------|--------------------------------|
+| `↑` / `k` | Move selection up              |
+| `↓` / `j` | Move selection down            |
+| `p`       | Inspect the selected prompt    |
+| `r`       | Reset the selected task        |
+| `q` / Esc | Quit                           |
 
 ### `bucle init`
 
@@ -97,16 +136,16 @@ placeholder.
 
 ### `bucle tasks` / `bucle list`
 
-Prints a Rich table with task index, name, agent, and emoji status:
+Prints a Rich table with task index, name, agent, and status (emoji + text):
 
 Pass `--limit N` to list only the first `N` configured tasks.
 
-| Emoji | Status       |
-|-------|--------------|
-| ✅    | done         |
-| ❌    | failed       |
-| ⚠️    | uncompleted  |
-| ⏳    | pending      |
+| Emoji | Status                      |
+|-------|-----------------------------|
+| ✅    | done                        |
+| ❌    | not done *(with reason)*    |
+| ⚠️    | not done                    |
+| ⏳    | not done                    |
 
 ### `bucle run`
 

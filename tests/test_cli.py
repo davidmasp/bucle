@@ -20,6 +20,8 @@ from bucle.cli import (
     collect_log_files,
     draw_prompt_window,
     extract_issue_agent,
+    extract_issue_cwd,
+    extract_issue_metadata,
     format_task_status,
     init_project,
     load_config,
@@ -114,6 +116,12 @@ class ConfigValidationTest(unittest.TestCase):
             with self.assertRaisesRegex(ConfigError, "auto-reset"):
                 load_config(config_path)
 
+    def test_invalid_cwd_fails(self) -> None:
+        config = VALID_CONFIG.format(cmd="echo {{prompt}}") + '\ncwd = "/tmp"\n'
+        with temp_config(config) as config_path:
+            with self.assertRaisesRegex(ConfigError, "cwd"):
+                load_config(config_path)
+
 
 class PromptRenderingTest(unittest.TestCase):
     def test_prompt_contains_expected_contract(self) -> None:
@@ -129,6 +137,16 @@ class PromptRenderingTest(unittest.TestCase):
         self.assertIn('echo "task1" >> .bucle/success.txt', prompt)
         self.assertIn('echo "task1,<reason>" >> .bucle/failure.txt', prompt)
         self.assertIn("success, failure, uncompleted", prompt)
+
+    def test_prompt_uses_marker_paths_relative_to_task_cwd(self) -> None:
+        config_text = VALID_CONFIG.format(cmd="echo {{prompt}}") + '\ncwd = "packages/app"\n'
+        with temp_config(config_text) as config_path:
+            config = load_config(config_path)
+            task = run_task(config, "task1")
+            prompt = render_prompt(config, task)
+
+        self.assertIn('echo "task1" >> ../../.bucle/success.txt', prompt)
+        self.assertIn('echo "task1,<reason>" >> ../../.bucle/failure.txt', prompt)
 
 
 class InitProjectTest(unittest.TestCase):
@@ -211,10 +229,47 @@ class InitProjectTest(unittest.TestCase):
 
 
 class SyncGithubIssuesTest(unittest.TestCase):
+    def test_bucle_issue_form_includes_sync_metadata_template(self) -> None:
+        form_path = Path(__file__).parents[1] / ".github" / "ISSUE_TEMPLATE" / "bucle.yml"
+        form = form_path.read_text()
+
+        self.assertIn("name: bucle issue", form)
+        self.assertIn("```yaml", form)
+        self.assertIn('cwd: ""', form)
+        self.assertIn("agent: opencode", form)
+
     def test_extract_issue_agent_reads_agent_line(self) -> None:
         self.assertEqual(extract_issue_agent("agent:fake\n\nDo work"), "fake")
         self.assertEqual(extract_issue_agent("agent: fake\n\nDo work"), "fake")
         self.assertIsNone(extract_issue_agent("Do work"))
+
+    def test_extract_issue_cwd_reads_cwd_line(self) -> None:
+        self.assertEqual(extract_issue_cwd('cwd:"./path/to"\n\nDo work'), "./path/to")
+        self.assertEqual(extract_issue_cwd('cwd: "./path/to"\n\nDo work'), "./path/to")
+        self.assertIsNone(extract_issue_cwd("Do work"))
+
+    def test_extract_issue_metadata_reads_leading_yaml_block(self) -> None:
+        body = '```yaml\n<var_for_dir>: ""\n<var_for_agent>: opencode\n```\n\nDo work'
+
+        self.assertEqual(
+            extract_issue_metadata(body),
+            {"cwd": "", "agent": "opencode"},
+        )
+        self.assertEqual(extract_issue_agent(body), "opencode")
+
+    def test_extract_issue_agent_prefers_yaml_block(self) -> None:
+        body = "```yaml\nagent: fake\n```\n\nagent: other\n\nDo work"
+
+        self.assertEqual(extract_issue_agent(body), "fake")
+
+    def test_extract_issue_metadata_supports_issue_form_heading(self) -> None:
+        body = '### Bucle sync metadata\n\n```yaml\ncwd: ""\nagent: fake\n```\n\n### Task prompt\n\nDo work'
+
+        self.assertEqual(extract_issue_agent(body), "fake")
+        self.assertEqual(
+            remove_issue_agent_line(body),
+            "### Task prompt\n\nDo work",
+        )
 
     def test_remove_issue_agent_line_removes_parsed_agent_line(self) -> None:
         self.assertEqual(
@@ -224,6 +279,14 @@ class SyncGithubIssuesTest(unittest.TestCase):
         self.assertEqual(
             remove_issue_agent_line("Intro\r\nagent: fake\r\nDo work"),
             "Intro\r\nDo work",
+        )
+        self.assertEqual(
+            remove_issue_agent_line('```yaml\nagent: fake\ncwd: ""\n```\n\nDo work'),
+            "Do work",
+        )
+        self.assertEqual(
+            remove_issue_agent_line('cwd:"./path/to"\nagent:fake\n\nDo work'),
+            "Do work",
         )
 
     def test_sync_imports_issue_as_task(self) -> None:
@@ -278,6 +341,72 @@ class SyncGithubIssuesTest(unittest.TestCase):
         self.assertEqual(
             run_gh_json.call_args_list[1].args,
             (config.path.parent, ["issue", "view", "1", "--json", "body,title"]),
+        )
+
+    def test_sync_imports_issue_with_yaml_metadata_as_task(self) -> None:
+        with temp_config(VALID_CONFIG.format(cmd="echo {{prompt}}")) as config_path:
+            config = load_config(config_path)
+            issue_body = '```yaml\ncwd: "./pkg"\nagent: fake\n```\n\nDo work from GitHub.'
+            with patch(
+                "bucle.cli.run_gh_json",
+                side_effect=[
+                    [{"title": "gh-task", "state": "OPEN", "number": 1}],
+                    {"body": issue_body, "title": "gh-task"},
+                ],
+            ):
+                result = sync_github_issues(config, author="davidmasp", tag="bucle")
+
+            document = tomlkit.parse(config_path.read_text())
+
+        self.assertEqual(result.added, 1)
+        self.assertEqual(result.skipped, 0)
+        self.assertEqual(document["tasks"][1]["agent"], "fake")
+        self.assertEqual(document["tasks"][1]["cwd"], "./pkg")
+        self.assertEqual(document["tasks"][1]["prompt"], "Do work from GitHub.\n")
+
+    def test_sync_imports_issue_with_inline_cwd_as_task(self) -> None:
+        with temp_config(VALID_CONFIG.format(cmd="echo {{prompt}}")) as config_path:
+            config = load_config(config_path)
+            issue_body = 'cwd:"./pkg"\nagent:fake\n\nDo work from GitHub.'
+            with patch(
+                "bucle.cli.run_gh_json",
+                side_effect=[
+                    [{"title": "gh-task", "state": "OPEN", "number": 1}],
+                    {"body": issue_body, "title": "gh-task"},
+                ],
+            ):
+                result = sync_github_issues(config, author="davidmasp", tag="bucle")
+
+            document = tomlkit.parse(config_path.read_text())
+
+        self.assertEqual(result.added, 1)
+        self.assertEqual(document["tasks"][1]["cwd"], "./pkg")
+        self.assertEqual(document["tasks"][1]["prompt"], "Do work from GitHub.\n")
+
+    def test_sync_reverse_imports_issue_before_existing_tasks(self) -> None:
+        with temp_config(VALID_CONFIG.format(cmd="echo {{prompt}}")) as config_path:
+            config = load_config(config_path)
+            with patch(
+                "bucle.cli.run_gh_json",
+                side_effect=[
+                    [
+                        {"title": "first", "state": "OPEN", "number": 1},
+                        {"title": "second", "state": "OPEN", "number": 2},
+                    ],
+                    {"body": "agent:fake\n\nDo first.", "title": "first"},
+                    {"body": "agent:fake\n\nDo second.", "title": "second"},
+                ],
+            ):
+                result = sync_github_issues(
+                    config, author="davidmasp", tag="bucle", reverse=True
+                )
+
+            document = tomlkit.parse(config_path.read_text())
+
+        self.assertEqual(result.added, 2)
+        self.assertEqual(
+            [task["name"] for task in document["tasks"]],
+            ["first", "second", "task1"],
         )
 
     def test_sync_skips_issue_without_agent_line(self) -> None:
@@ -341,6 +470,33 @@ class SyncGithubIssuesTest(unittest.TestCase):
         self.assertEqual(result.exit_code, 0)
         self.assertIn("Added issue #1 gh-task.", result.output)
         self.assertIn("Synced GitHub issues: 1 added, 0 skipped.", result.output)
+
+    def test_sync_cli_reverse_adds_issue_before_existing_tasks(self) -> None:
+        with temp_config(VALID_CONFIG.format(cmd="echo {{prompt}}")) as config_path:
+            with patch(
+                "bucle.cli.run_gh_json",
+                side_effect=[
+                    [{"title": "gh-task", "state": "OPEN", "number": 1}],
+                    {"body": "agent:fake\n\nDo work from GitHub.", "title": "gh-task"},
+                ],
+            ):
+                result = runner.invoke(
+                    app,
+                    [
+                        "sync",
+                        "--config",
+                        str(config_path),
+                        "--author",
+                        "davidmasp",
+                        "--reverse",
+                    ],
+                )
+
+            document = tomlkit.parse(config_path.read_text())
+
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(document["tasks"][0]["name"], "gh-task")
+        self.assertEqual(document["tasks"][1]["name"], "task1")
 
 
 class RenderReportTest(unittest.TestCase):
@@ -506,6 +662,34 @@ class RunReconciliationTest(unittest.TestCase):
         self.assertIn("Launching task 1/1: task1", result.output)
         self.assertIn(str(config_path.parent / ".bucle"), result.output)
         self.assertIn("task1.fake.log", result.output)
+
+    def test_run_executes_task_from_configured_cwd(self) -> None:
+        config_text = """
+        [metadata]
+        name = "example"
+        preprompt = "Before"
+        postprompt = "After"
+
+        [agents.fake]
+        cmd = "pwd > ../pwd.txt; echo task1 >> ../.bucle/success.txt; true {{prompt}}"
+
+        [[tasks]]
+        name = "task1"
+        agent = "fake"
+        cwd = "work"
+        prompt = "Do task one"
+        """
+        with temp_config(config_text) as config_path:
+            (config_path.parent / "work").mkdir()
+            config = load_config(config_path)
+            ran_tasks = run_pending_tasks(config)
+            reconcile_results(config, ran_tasks)
+
+            document = tomlkit.parse(config_path.read_text())
+            pwd = (config_path.parent / "pwd.txt").read_text().strip()
+
+        self.assertEqual(document["tasks"][0]["status"], "success")
+        self.assertEqual(pwd, str((config_path.parent / "work").resolve()))
 
     def assert_log_contains(self, root: Path, *needles: str) -> None:
         logs = list((root / ".bucle").glob("*.log"))
@@ -752,6 +936,7 @@ def run_task(config, name: str):
                 name=str(task["name"]),
                 agent=str(task["agent"]),
                 prompt=str(task["prompt"]),
+                cwd=str(task["cwd"]) if task.get("cwd") is not None else None,
                 index=index,
             )
     raise AssertionError(f"missing task {name}")

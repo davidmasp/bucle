@@ -17,6 +17,27 @@ cmd = "opencode run --model openai/gpt-5.5 {{prompt}}"
 
 ## we need to include some sort of git integration but we are not sure how to do it, we could do it in the agent itself, but maybe it's better to do it in the tool. For instance, after every task, we could commit the changes with a random message. We could even generate the commit message with the external LLM handled by bucle itself, for instance, we could have a API call like "generate commit message" that would take as input the name of the task and the status (success or failure) and then it would generate a commit message that we could use for the commit.
 
+[[tasks]]
+name = "bucle-factorize-synclogic"
+agent = "opencode"
+prompt = """
+I see that what we have factorization for in the cli script are the commands themselves but not the logic.
+
+For instance, we have this
+
+src/bucle/cli.py:21-28
+
+but the logic for the sync command is still in the cli script.
+
+I want to move that logic into a separate file, for instance src/bucle/sync.py and then import it into the cli script.
+
+Sync logic will be all things needed for the sync command to work.
+
+For instance, src/bucle/cli.py:364-486
+
+Let's start facotrizing only the sync command for now.
+"""
+
 
 [[tasks]]
 name = "bucle-factorize-helpers"
@@ -140,6 +161,8 @@ name = "task3"
 agent = "bigpickle"
 prompt = "this task is a test to fail, report failure and exit"
 auto-reset = true
+status = "failure"
+failure_reason = "intentional test failure"
 
 [[tasks]]
 name = "task2"
@@ -197,3 +220,43 @@ status = "success"
 name = "readme-update"
 agent = "bigpickle"
 prompt = "Check the codebase of this folder, then read the README file. Update it according to the newer functionality available"
+[[tasks]]
+name = "reverse-sync"
+agent = "opencode"
+prompt = """
+For the sync command, I want to add an argument that reverses the addition of the task commands, the idea is that it will add the issue task on top, instead of on the bottom of the TOML file.
+"""
+status = "success"
+[[tasks]]
+name = "create-issue-form"
+agent = "opencode"
+prompt = """
+I want to create a GitHub Issue Forms for this repo. The form should include the necessary field for a task in bucle.
+
+Title of the form should be bucle issue, and then it should ask for the title of the task, the agent and the cwd.
+
+For the bucle sync command, I think we should change the way we parse the variable information. We should now include a yaml block in the begining of the issue body to make it easier to parse. Change the parsing logic to support that. If there is no yaml block in the body, fall back to the current logic. Can you also include a template or smth to include that behaviour into the issues?
+
+an example block would be.
+
+```yaml
+<var_for_dir>: ""
+<var_for_agent>: opencode
+```
+"""
+status = "success"
+[[tasks]]
+name = "adding-cwd-parameter"
+agent = "opencode"
+prompt = """
+I want to add a cwd parameter in the TOML file.
+
+This would go into each task instance. It should be optional. If not present, the default should be the current directory.
+
+Otherwise if present, bucle run should first execute the agent from the selected directory.
+
+For the sync command, I want the software to also parse the new parameter in the body of the text. The cwd should be of the form cwd:"./path/to".
+
+Note that the cwd will always be relative to the repository root.
+"""
+status = "success"

@@ -1,6 +1,6 @@
 name: Bucle task
 description: Create a bucle task issue that can be imported with `bucle sync`.
-title: "bucle: "
+title: "bucle-task-{{DATE}}"
 labels:
   - bucle
 body:
@@ -14,14 +14,6 @@ body:
         cwd: ""
         agent: opencode
         ```
-    validations:
-      required: true
-  - type: input
-    id: task-title
-    attributes:
-      label: Task title
-      description: Use the same title as the GitHub issue title. `bucle sync` imports the issue title as the task name.
-      placeholder: Add the task title
     validations:
       required: true
   - type: textarea

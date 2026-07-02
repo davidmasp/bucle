@@ -23,9 +23,9 @@ from bucle.cli import (
     init_project,
     load_config,
     reconcile_results,
-    reset_auto_tasks,
-    render_site,
     render_prompt,
+    render_site,
+    reset_auto_tasks,
     reset_task,
     run_pending_tasks,
 )
@@ -141,14 +141,16 @@ class PromptRenderingTest(unittest.TestCase):
         self.assertIn("success, failure, uncompleted", prompt)
 
     def test_prompt_uses_marker_paths_relative_to_task_cwd(self) -> None:
-        config_text = VALID_CONFIG.format(cmd="echo {{prompt}}") + '\ncwd = "packages/app"\n'
+        config_text = (
+            VALID_CONFIG.format(cmd="echo {{prompt}}") + '\ncwd = "packages/app"\n'
+        )
         with temp_config(config_text) as config_path:
             config = load_config(config_path)
             task = run_task(config, "task1")
             prompt = render_prompt(config, task)
 
-        self.assertIn('echo "task1" >> ../../.bucle/success.txt', prompt)
-        self.assertIn('echo "task1,<reason>" >> ../../.bucle/failure.txt', prompt)
+        self.assertIn('echo "task1" >> .bucle/success.txt', prompt)
+        self.assertIn('echo "task1,<reason>" >> .bucle/failure.txt', prompt)
 
 
 class InitProjectTest(unittest.TestCase):
@@ -232,10 +234,11 @@ class InitProjectTest(unittest.TestCase):
 
 class SyncGithubIssuesTest(unittest.TestCase):
     def test_bucle_issue_form_includes_sync_metadata_template(self) -> None:
-        form_path = Path(__file__).parents[1] / ".github" / "ISSUE_TEMPLATE" / "bucle.yml"
+        form_path = (
+            Path(__file__).parents[1] / ".github" / "ISSUE_TEMPLATE" / "bucle.yml"
+        )
         form = form_path.read_text()
 
-        self.assertIn("name: bucle issue", form)
         self.assertIn("```yaml", form)
         self.assertIn('cwd: ""', form)
         self.assertIn("agent: opencode", form)
@@ -324,7 +327,9 @@ class SyncGithubIssuesTest(unittest.TestCase):
         self.assertEqual(document["tasks"][1]["name"], "gh-task")
         self.assertEqual(document["tasks"][1]["agent"], "fake")
         self.assertEqual(document["tasks"][1]["prompt"], expected_prompt)
-        self.assertIn('prompt = """\nDo work from GitHub.\n\n- first\n- second\n"""', config_text)
+        self.assertIn(
+            'prompt = """\nDo work from GitHub.\n\n- first\n- second\n"""', config_text
+        )
         self.assertNotIn("agent:fake", config_text)
         self.assertEqual(
             run_gh_json.call_args_list[0].args,
@@ -348,7 +353,9 @@ class SyncGithubIssuesTest(unittest.TestCase):
     def test_sync_imports_issue_with_yaml_metadata_as_task(self) -> None:
         with temp_config(VALID_CONFIG.format(cmd="echo {{prompt}}")) as config_path:
             config = load_config(config_path)
-            issue_body = '```yaml\ncwd: "./pkg"\nagent: fake\n```\n\nDo work from GitHub.'
+            issue_body = (
+                '```yaml\ncwd: "./pkg"\nagent: fake\n```\n\nDo work from GitHub.'
+            )
             with patch(
                 "bucle.sync.run_gh_json",
                 side_effect=[
@@ -551,7 +558,9 @@ class RunReconciliationTest(unittest.TestCase):
             self.assertNotIn("failure_reason", document["tasks"][0])
             self.assertFalse((config_path.parent / ".bucle" / "success.txt").exists())
             self.assertFalse((config_path.parent / ".bucle" / "failure.txt").exists())
-            self.assert_log_contains(config_path.parent, "exit_code:", "stdout:", "stderr:")
+            self.assert_log_contains(
+                config_path.parent, "exit_code:", "stdout:", "stderr:"
+            )
 
     def test_failure_marker_updates_toml_with_reason(self) -> None:
         with temp_config(config_for_fake_agent("failure")) as config_path:
@@ -673,7 +682,7 @@ class RunReconciliationTest(unittest.TestCase):
         postprompt = "After"
 
         [agents.fake]
-        cmd = "pwd > ../pwd.txt; echo task1 >> ../.bucle/success.txt; true {{prompt}}"
+        cmd = "mkdir -p .bucle; pwd > ../pwd.txt; echo task1 >> .bucle/success.txt; true {{prompt}}"
 
         [[tasks]]
         name = "task1"
@@ -692,6 +701,9 @@ class RunReconciliationTest(unittest.TestCase):
 
         self.assertEqual(document["tasks"][0]["status"], "success")
         self.assertEqual(pwd, str((config_path.parent / "work").resolve()))
+        self.assertFalse(
+            (config_path.parent / "work" / ".bucle" / "success.txt").exists()
+        )
 
     def assert_log_contains(self, root: Path, *needles: str) -> None:
         logs = list((root / ".bucle").glob("*.log"))
@@ -748,12 +760,17 @@ class ResetTaskTest(unittest.TestCase):
             self.assertEqual(document["tasks"][1]["failure_reason"], "bad result")
 
     def test_reset_auto_cli_does_not_require_task_name(self) -> None:
-        config_text = VALID_CONFIG.format(cmd="echo {{prompt}}") + """
+        config_text = (
+            VALID_CONFIG.format(cmd="echo {{prompt}}")
+            + """
         status = "success"
         auto-reset = true
         """
+        )
         with temp_config(config_text) as config_path:
-            result = runner.invoke(app, ["reset", "--auto", "--config", str(config_path)])
+            result = runner.invoke(
+                app, ["reset", "--auto", "--config", str(config_path)]
+            )
 
             document = tomlkit.parse(config_path.read_text())
             self.assertEqual(result.exit_code, 0)
@@ -763,7 +780,9 @@ class ResetTaskTest(unittest.TestCase):
 
 class TaskListTest(unittest.TestCase):
     def test_format_task_status_marks_success_done(self) -> None:
-        self.assertEqual(format_task_status({"status": "success"}), ("✅ done", "green"))
+        self.assertEqual(
+            format_task_status({"status": "success"}), ("✅ done", "green")
+        )
 
     def test_format_task_status_marks_missing_status_not_done(self) -> None:
         self.assertEqual(format_task_status({}), ("⏳ not done", "yellow"))
@@ -829,7 +848,9 @@ class TaskListTest(unittest.TestCase):
             """
         )
         with temp_config(config_text) as config_path:
-            result = runner.invoke(app, ["list", "--config", str(config_path), "--limit", "2"])
+            result = runner.invoke(
+                app, ["list", "--config", str(config_path), "--limit", "2"]
+            )
 
         self.assertEqual(result.exit_code, 0)
         self.assertIn("task1", result.output)

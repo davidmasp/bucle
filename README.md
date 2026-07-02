@@ -41,6 +41,7 @@ name = "task1"
 agent = "codex"
 prompt = "say hi!"
 auto-reset = true
+# cwd = "packages/app"
 ```
 
 ### `[metadata]`
@@ -64,6 +65,7 @@ auto-reset = true
 | `name`           | Unique task identifier                           |
 | `agent`          | References a named agent                         |
 | `prompt`         | Instruction sent to the agent                    |
+| `cwd`            | Optional relative working directory for the task |
 | `auto-reset`     | Optional boolean; reset by `bucle reset --auto`  |
 | `status`         | (managed by bucle) `success`, `failure`, `uncompleted` |
 | `failure_reason` | (managed by bucle) Human-readable failure reason |
@@ -74,7 +76,7 @@ auto-reset = true
 bucle check   [--config / -c]       Validate the config file
 bucle init                         Create .bucle/, .bucle.toml, and update .gitignore
 bucle run     [--config / -c] [--reverse] [--shuffle] [--limit N] [-v]  Run pending tasks and reconcile results
-bucle sync    [--config / -c] --author <user> [--tag bucle]  Import GitHub issues as tasks
+bucle sync    [--config / -c] --author <user> [--tag bucle] [--reverse]  Import GitHub issues as tasks
 bucle tasks   [--config / -c] [--limit N]       List tasks in a Rich table
 bucle list    [--config / -c] [--limit N]       Alias for `bucle tasks`
 bucle reset   <task-name> [-c]      Reset a task to pending
@@ -124,8 +126,9 @@ bucle tui --limit 10
 
 ### `bucle init`
 
-Creates an empty `.bucle/` directory, appends `.bucle/` to `.gitignore`, and
-writes a starter `.bucle.toml`. The command fails if `.gitignore` is missing or
+Creates an empty `.bucle/` directory, appends `.bucle/` to `.gitignore`, writes
+a starter `.bucle.toml`, and appends `bucle` / `bucle-list` recipes to an
+existing `Justfile`. The command fails if `.gitignore` is missing or
 `.bucle.toml` already exists.
 
 ### `bucle check`
